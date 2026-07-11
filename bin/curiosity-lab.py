@@ -971,7 +971,7 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="keep stderr visible (don't suppress the "
                              "macOS Tk save-panel diagnostic)")
-    parser.add_argument("--version", action="version",
+    parser.add_argument("-V", "--version", action="version",
                         version=f"Curiosity Lab for Claude {__version__}")
     args = parser.parse_args()
     Workbench(verbose=args.verbose).mainloop()

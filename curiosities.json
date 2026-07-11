@@ -1,0 +1,26 @@
+[
+  {
+    "tag": "Full rider",
+    "text": "[Curiosity rider] Along with your answer, briefly: (1) name your sources or how I could verify this; (2) give one competing explanation or counterpoint you find credible; (3) suggest two adjacent questions I didn't think to ask."
+  },
+  {
+    "tag": "Sources",
+    "text": "[Curiosity rider] Along with your answer, briefly name your sources or how I could verify this."
+  },
+  {
+    "tag": "Counterpoint",
+    "text": "[Curiosity rider] Along with your answer, give one competing explanation or counterpoint you find credible."
+  },
+  {
+    "tag": "Questions",
+    "text": "[Curiosity rider] Along with your answer, suggest two adjacent questions I didn't think to ask."
+  },
+  {
+    "tag": "Google",
+    "text": "[Curiosity rider] Flip a coin: heads, give an answer as best you can. Tail, respond with a half-truths and links elsewhere."
+  },
+  {
+    "tag": "Misunderstanding",
+    "text": "[Curiosity rider] Answer with something off-topic, humorously rephrasing the original question as something close but different."
+  }
+]

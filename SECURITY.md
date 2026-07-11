@@ -2,7 +2,7 @@
 
 **Author:** JohnB, with AI pair-programming support by Anthropic Claude<br/>
 **Date:** 2026-07-11<br/>
-**Target version:** `bin/curiosity-lab.py` v2.3.0 (977 lines)<br/>
+**Target version:** `bin/curiosity-lab.py` v2.4.0 (1,041 lines)<br/>
 **Methodology:** static analysis with Bandit and Semgrep, dependency audit with pip-audit,<br/>
 &nbsp; &nbsp; and the same triage framework as the sibling Web-Print assessment<br/>
 &nbsp; &nbsp; (accept-by-design / false-positive / remediate / accept-risk).
@@ -11,7 +11,7 @@
 
 **PASS. Zero findings from all three scanners.**
 
-- Bandit: **no issues identified** (823 lines of code scanned, no `#nosec` suppressions).
+- Bandit: **no issues identified** (883 lines of code scanned, no `#nosec` suppressions).
 - Semgrep (`p/python`, `p/security-audit`, `p/command-injection`): **no findings**.
 - pip-audit: **no known vulnerabilities** in dependencies.
 - The security-relevant design points a reviewer should know are therefore all in<br/>
@@ -86,15 +86,19 @@ The persona text, the loaded Me-file, and the full conversation history are sent
 The README's privacy note tells users to load only Me-file content they are<br/>
 &nbsp; &nbsp; comfortable sending. Nothing is sent anywhere else.
 
-3. **The API key never touches the tool's code or files.**<br/>
-The key is resolved from the environment by the SDK (`anthropic.Anthropic()`);<br/>
-&nbsp; &nbsp; it is never read, stored, logged, exported, or written to `settings.json`<br/>
-&nbsp; &nbsp; by Curiosity Lab. The README documents per-window key scoping so the key<br/>
-&nbsp; &nbsp; cannot silently shadow a Max-plan login elsewhere.
+3. **The API key is handled minimally.**<br/>
+The key is resolved from the environment by the SDK (`anthropic.Anthropic()`),<br/>
+&nbsp; &nbsp; or — since v2.4.0 — read once from a user-chosen key file (`apikey.txt`,<br/>
+&nbsp; &nbsp; auto-loaded, or any file via the **API** button) and passed directly to<br/>
+&nbsp; &nbsp; the SDK constructor. It is never logged, exported, or written to any file<br/>
+&nbsp; &nbsp; by Curiosity Lab, and never displayed beyond its last four characters.<br/>
+&nbsp; &nbsp; `apikey.txt` and `*.key` are `.gitignore`d against accidental publishing.<br/>
+&nbsp; &nbsp; The README documents per-window key scoping so an environment key cannot<br/>
+&nbsp; &nbsp; silently shadow a Max-plan login elsewhere.
 
 4. **`settings.json` write-back is bounded.**<br/>
 On Quit the tool rewrites the user's `settings.json` to remember the window<br/>
-&nbsp; &nbsp; geometry. Guardrails: an unparseable file is **never overwritten**<br/>
+&nbsp; &nbsp; position (the size is recomputed at startup to fit the content). Guardrails: an unparseable file is **never overwritten**<br/>
 &nbsp; &nbsp; (left in place for the user to fix), a missing file is created,<br/>
 &nbsp; &nbsp; and only the geometry entry is modified.
 

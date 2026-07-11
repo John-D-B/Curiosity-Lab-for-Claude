@@ -32,7 +32,7 @@ with or endorsed by Anthropic.
 
 from __future__ import annotations
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 import datetime
 import json
@@ -102,6 +102,7 @@ PERSONAS_FILE = "personas.json"
 CURIOSITIES_FILE = "curiosities.json"
 SETTINGS_FILE = "settings.json"
 DEMOS_FILE = "demos.json"
+APIKEY_FILE = "apikey.txt"   # auto-loaded at startup when present
 NO_CURIOSITY = "(none)"
 
 DEFAULT_PERSONAS = [
@@ -119,7 +120,7 @@ DEFAULT_PERSONAS = [
      "text": "You are the user themself, as described in the loaded "
              "Me-file. Adopt their voice, interests, and mannerisms. If no "
              "Me-file has been loaded, admit you have no idea who you are "
-             "supposed to be, and ask for one (the Me… button)."},
+             "supposed to be, and ask for one (the Me button)."},
 ]
 
 DEFAULT_CURIOSITIES = [
@@ -142,7 +143,7 @@ DEFAULT_CURIOSITIES = [
 
 
 # Demo bundles: pre-reviewed knob combinations users can pick from the
-# Demos… button. Each bundle is a "tag" plus any settings.json keys
+# Demos button. Each bundle is a "tag" plus any settings.json keys
 # (Geometry excluded). The file is read fresh on every click, so a
 # downloaded or hand-edited demos.json works without a restart.
 DEFAULT_DEMOS = [
@@ -220,7 +221,9 @@ SETTINGS_ALIASES = {"model": "model", "models": "model",
                     "prompt": "prompt", "preload": "prompt",  # pre-2.2 name
                     "mefile": "mefile", "me-file": "mefile", "me": "mefile",
                     "geometry": "geometry", "window": "geometry",
-                    "position": "geometry"}
+                    "position": "geometry",
+                    "apikey": "apikey", "api-key": "apikey",
+                    "keyfile": "apikey"}
 
 
 def normalize_keys(raw, notes, source):
@@ -311,7 +314,6 @@ class Workbench(tk.Tk):
         super().__init__()
         self.verbose = verbose          # -v | --verbose: keep stderr visible
         self.title(f"Curiosity Lab for Claude - v{__version__} - using API tokens")
-        self.geometry("1120x640")
         self.protocol("WM_DELETE_WINDOW", self._quit)   # red dot saves too
 
         self.client = anthropic.Anthropic() if anthropic else None
@@ -326,8 +328,16 @@ class Workbench(tk.Tk):
         self.streaming = False
 
         self._build_ui()
+        # The app picks its own size: wide enough that the top bar always
+        # fits, tall enough to read. Only the POSITION is remembered in
+        # settings.json — see _save_geometry.
+        self.update_idletasks()
+        self.geometry(f"{max(self.winfo_reqwidth(), 900)}x640")
         for err in self._config_errors:
             self._append(f"[{err}]\n", "note")
+        default_key = os.path.join(CONFIG_DIR, APIKEY_FILE)
+        if os.path.exists(default_key):
+            self._set_api_key(default_key)   # settings/env still documented
         self._apply_settings()
         # Launched from a terminal, Tk windows on macOS start BEHIND the
         # launcher. Briefly claim topmost, then let go.
@@ -379,9 +389,11 @@ class Workbench(tk.Tk):
         size_box.pack(side="left", padx=4)
         size_box.bind("<<ComboboxSelected>>", self._apply_font_size)
 
-        ttk.Button(top, text="Me…", command=self._load_me).pack(side="left",
-                                                                padx=(12, 0))
-        self.demos_btn = ttk.Button(top, text="Demos…",
+        ttk.Button(top, text="API", command=self._load_api_key).pack(
+            side="left", padx=(12, 0))
+        ttk.Button(top, text="Me", command=self._load_me).pack(side="left",
+                                                                padx=4)
+        self.demos_btn = ttk.Button(top, text="Demos",
                                     command=self._pick_demo)
         self.demos_btn.pack(side="left", padx=4)
         ttk.Button(top, text="New", command=self._reset).pack(side="left", padx=4)
@@ -471,7 +483,7 @@ class Workbench(tk.Tk):
         self._apply_prefs(settings, notes)
 
     def _pick_demo(self):
-        """Demos… button: read demos.json fresh and pop a menu of bundles.
+        """Demos button: read demos.json fresh and pop a menu of bundles.
         Picking one sets the knobs and pre-fills the prompt — the text
         stays editable before Send."""
         demos, err = load_bundles(DEMOS_FILE, DEFAULT_DEMOS)
@@ -550,12 +562,22 @@ class Workbench(tk.Tk):
                              f"{self.font_size.get()}")
         if "geometry" in settings:
             geo = str(settings["geometry"]).strip()
-            if re.fullmatch(r"(\d+x\d+)?[+-]\d+[+-]\d+", geo):
-                self.geometry(geo)
+            pos = re.search(r"[+-]\d+[+-]\d+$", geo)
+            if pos and re.fullmatch(r"(\d+x\d+)?[+-]\d+[+-]\d+", geo):
+                self.geometry(pos.group())   # position only; size is ours
             else:
                 notes.append(f"{source}: unreadable geometry "
                              f"{settings['geometry']!r} — expected "
-                             f"'+x+y' or 'WxH+x+y'")
+                             f"'+x+y'")
+        if "apikey" in settings:
+            raw_path = os.path.expanduser(str(settings["apikey"]).strip())
+            path = (raw_path if os.path.isabs(raw_path)
+                    else os.path.join(CONFIG_DIR, raw_path))
+            if os.path.exists(path):
+                self._set_api_key(path)
+            else:
+                notes.append(f"{source}: api-key file {raw_path!r} "
+                             f"not found — skipped")
         if "mefile" in settings:
             raw_path = os.path.expanduser(str(settings["mefile"]).strip())
             path = (raw_path if os.path.isabs(raw_path)
@@ -828,10 +850,15 @@ class Workbench(tk.Tk):
         self.destroy()
 
     def _save_geometry(self):
-        """Remember the window position/size in settings.json (the quick
-        win): written on Quit or window close, applied at next startup.
-        A missing settings file is created; a broken one is left alone."""
-        geo = self.geometry()   # "WxH+x+y"
+        """Remember the window POSITION in settings.json — written on Quit
+        or window close, applied at next startup. The size is not saved:
+        the app computes its own natural size, so it always fits its
+        content. A missing settings file is created; a broken one is
+        left alone."""
+        pos = re.search(r"[+-]\d+[+-]\d+$", self.geometry())
+        if not pos:
+            return
+        geo = pos.group()       # "+x+y" — position only
         path = os.path.join(CONFIG_DIR, SETTINGS_FILE)
         try:
             with open(path, encoding="utf-8") as f:
@@ -879,6 +906,47 @@ class Workbench(tk.Tk):
             os.dup2(stderr_copy, 2)
             os.close(devnull)
             os.close(stderr_copy)
+
+    # ---- api key -----------------------------------------------------------
+    def _load_api_key(self):
+        """API button: pick a file whose first line is an Anthropic API
+        key — the no-terminal alternative to environment variables. A file
+        named apikey.txt next to the configs loads automatically at
+        startup."""
+        path = self._file_dialog(
+            filedialog.askopenfilename,
+            title="Load an API key file (first line: sk-ant-…)",
+            filetypes=[("Text", "*.txt"), ("All files", "*.*")],
+        )
+        if path:
+            self._set_api_key(path)
+
+    def _set_api_key(self, path):
+        """Read a key file and rebuild the API client with it. Only the
+        last four characters are ever shown; the key itself is never
+        logged, echoed, or written anywhere."""
+        if anthropic is None:
+            self._append("\n[the 'anthropic' package isn't installed — "
+                         "run: pip install anthropic]\n", "note")
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                content = f.read().strip()
+        except OSError as exc:
+            self._append(f"\n[api-key file: {exc}]\n", "note")
+            return
+        key = content.split()[0] if content else ""
+        name = os.path.basename(path)
+        if not key:
+            self._append(f"\n[api-key file “{name}” is empty]\n", "note")
+            return
+        self.client = anthropic.Anthropic(api_key=key)
+        masked = key[-4:] if len(key) >= 12 else "????"
+        warn = ("" if key.startswith("sk-ant-")
+                else " — warning: doesn't look like an Anthropic key")
+        self._append(f"\n[API key …{masked} loaded from “{name}”"
+                     f"{warn}]\n", "meta")
+        self.status.set(f"API key …{masked} active (from {name})")
 
     # ---- me-file -----------------------------------------------------------
     def _load_me(self):

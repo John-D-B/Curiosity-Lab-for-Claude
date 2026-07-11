@@ -1,6 +1,6 @@
 # Me-file template — copy to `me.md` and make it yours
 
-*How this works: load your copy via the **Me…** button, or point*
+*How this works: load your copy via the **Me** button, or point*
 *`"Mefile": "me.md"` at it in settings.json. The whole file rides along in*
 *the system prompt of **every** call — roughly one token per four characters,*
 *billed each turn — so keep it tight: a page is plenty.*

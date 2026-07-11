@@ -963,14 +963,20 @@ class Workbench(tk.Tk):
 if __name__ == "__main__":
     import argparse
 
+    class _HelpFormat(argparse.RawDescriptionHelpFormatter):
+        """Keep the hand-wrapped description and end with a blank line."""
+        def format_help(self):
+            return super().format_help() + "\n"
+
     parser = argparse.ArgumentParser(
         prog="curiosity-lab",
+        formatter_class=_HelpFormat,
         description="Curiosity Lab for Claude — a small chat window where "
-                    "you pick a persona, add curiosity to your questions, "
+                    "you pick a persona,\nadd curiosity to your questions, "
                     "and watch what every answer costs.")
     parser.add_argument("-v", "--verbose", action="store_true",
-                        help="keep stderr visible (don't suppress the "
-                             "macOS Tk save-panel diagnostic)")
+                        help="keep stderr visible (don't suppress Tk "
+                             "file-dialog diagnostics)")
     parser.add_argument("-V", "--version", action="version",
                         version=f"Curiosity Lab for Claude {__version__}")
     args = parser.parse_args()

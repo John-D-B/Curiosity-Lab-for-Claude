@@ -1,0 +1,22 @@
+.code
+.idea
+.DS_Store
+*.swp
+*.swo
+__pycache__/
+*.py[cod]
+.pytest_cache
+
+# - Dev only:
+.claude
+.devcontainers
+JohnB.me.md
+README-dev.md
+zDev/
+zChats/
+
+# - Personal (me.template.md ships; your copy doesn't):
+me.md
+settings.json
+bin/*_v*.py
+

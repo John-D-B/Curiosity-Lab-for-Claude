@@ -349,13 +349,15 @@ class Workbench(tk.Tk):
 
     # ---- UI --------------------------------------------------------------
     def _build_ui(self):
-        top = ttk.Frame(self, padding=6)
+        top = ttk.Frame(self, padding=(12, 10, 12, 6))
         top.pack(fill="x")
 
         ttk.Label(top, text="Model:").pack(side="left")
         self.model = tk.StringVar(value=DEFAULT_MODEL)
-        ttk.Combobox(top, textvariable=self.model, values=list(PRICING),
-                     state="readonly", width=18).pack(side="left", padx=(4, 12))
+        model_box = ttk.Combobox(top, textvariable=self.model,
+                                 values=list(PRICING),
+                                 state="readonly", width=18)
+        model_box.pack(side="left", padx=(4, 12))
 
         self._config_errors = []
         self.personas, err = load_choices(PERSONAS_FILE, DEFAULT_PERSONAS)
@@ -389,6 +391,13 @@ class Workbench(tk.Tk):
         size_box.pack(side="left", padx=4)
         size_box.bind("<<ComboboxSelected>>", self._apply_font_size)
 
+        # Readonly comboboxes keep their value text highlighted after a
+        # pick until focus moves — clear that selection immediately.
+        for box in (model_box, self.persona_box, self.curiosity_box,
+                    size_box):
+            box.bind("<<ComboboxSelected>>",
+                     lambda e: e.widget.selection_clear(), add="+")
+
         ttk.Button(top, text="API", command=self._load_api_key).pack(
             side="left", padx=(12, 0))
         ttk.Button(top, text="Me", command=self._load_me).pack(side="left",
@@ -400,8 +409,8 @@ class Workbench(tk.Tk):
 
         # All fonts are set centrally by _apply_font_size(); only the
         # colors live here.
-        self.view = scrolledtext.ScrolledText(self, wrap="word", state="disabled")
-        self.view.pack(fill="both", expand=True, padx=6)
+        self.view = scrolledtext.ScrolledText(self, wrap="word", state="disabled",
+                                              padx=8, pady=6)
         self.view.tag_config("user", foreground="#1a7a55")
         self.view.tag_config("assistant", foreground="#222222")
         self.view.tag_config("note", foreground="#c03030")
@@ -419,8 +428,7 @@ class Workbench(tk.Tk):
         self.view.mark_set("reply_start", "end-1c")
         self.view.mark_gravity("reply_start", "left")
 
-        bottom = ttk.Frame(self, padding=6)
-        bottom.pack(fill="x")
+        bottom = ttk.Frame(self, padding=(12, 4, 12, 10))
         # The button column is packed FIRST (from the right) so it always
         # keeps its size; the entry's nominal width stays small so its
         # font-dependent requested width can't squeeze the buttons out at
@@ -442,13 +450,22 @@ class Workbench(tk.Tk):
         self.send_btn.pack()
         save_btn.pack(pady=2)
         quit_btn.pack()
-        self.entry = tk.Text(bottom, height=3, wrap="word", width=10)
+        self.entry = tk.Text(bottom, height=3, wrap="word", width=10,
+                             padx=8, pady=6)
         self.entry.pack(side="left", fill="x", expand=True)
         self.entry.bind("<Return>", self._on_return)   # Enter sends; Shift+Enter = newline
 
         self.status = tk.StringVar(value="ready — $0.000000 this session")
-        ttk.Label(self, textvariable=self.status, anchor="w",
-                  relief="sunken", padding=3).pack(fill="x", side="bottom")
+        status_bar = ttk.Label(self, textvariable=self.status, anchor="w",
+                               relief="sunken", padding=3)
+
+        # Pack order = squeeze priority: the cost meter and the button row
+        # claim their space FIRST, and the transcript (packed last, packed
+        # expanding) absorbs any height shortfall — nothing vital can be
+        # clipped off the bottom again.
+        status_bar.pack(fill="x", side="bottom")
+        bottom.pack(fill="x", side="bottom")
+        self.view.pack(fill="both", expand=True, padx=12, pady=(2, 4))
 
         self._apply_font_size()
 
@@ -799,6 +816,8 @@ class Workbench(tk.Tk):
                 elif kind == "error":
                     self.log.append({"kind": "note", "text": payload})
                     self._append(f"\n[{payload}]\n", "note")
+                    self.status.set(f"error — see transcript    "
+                                    f"session total: ${self.spend:.6f}")
                     self._finish()
                 elif kind == "done":
                     self._on_done(*payload)

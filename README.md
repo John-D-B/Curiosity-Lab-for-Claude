@@ -3,12 +3,14 @@
 
 *Curiosity killed the cat. Satisfaction brought him back.*<br/>
 
-**Curiosity Lab for Claude** is a Python Chat app, a front-end into the Anthropic API system,<br/>
-&nbsp; &nbsp; with easy selectors of **Model** of Claude, **Persona** style, **Curiosity** injections, and **Demo** bundles.
+**Curiosity Lab for Claude** is a Python chat app for the Anthropic API:<br/>
+&nbsp; &nbsp; easy selectors for Claude **Model**, **Persona** style, **Curiosity** riders, and **Demo** bundles —<br/>
+&nbsp; &nbsp; plus a running cost meter, so every answer shows what it cost. Typically: under a cent.
 
-After each chat, the same prompt text remains - for easy selection of new **menu** parameters, then **Send**.<br/>
-&nbsp; &nbsp; Or, press **New** and **Send** again, to observe LLM non-determinism in responses - a feature, not a bug.<br/>
-&nbsp; &nbsp; API **costs** and token use are shown at the bottom. Costs are minimal.
+Your prompt stays in the box after each reply —<br/>
+&nbsp; &nbsp; change a selector, press **Send**, and compare.<br/>
+Or press **New** and re-send unchanged, and the answers differ anyway:<br/>
+&nbsp; &nbsp; LLM non-determinism is a feature, not a bug.
 
 <p align="center">
   <img src="images/zHero.png" alt="Curiosity Lab: pick a persona, add a curiosity rider, watch the meter">
@@ -33,7 +35,7 @@ But **curiosity is a practice**, not a prescription.<br/>
 Nothing stops anyone from asking for the detours — sources, counterpoints,<br/>
 &nbsp; &nbsp; adjacent questions. So why not put that habit on a button?
 
-Elsewhere I proposed an **Add Curiosity button** as a small engineering exercise,<br/>
+I proposed an **Add Curiosity button** as a small engineering exercise —<br/>
 &nbsp; &nbsp; and three days later, **Curiosity Lab for Claude** was born!
 
 <br/>
@@ -41,7 +43,7 @@ Elsewhere I proposed an **Add Curiosity button** as a small engineering exercise
 ### 1A. The Laboratory Knobs
 
 <details>
-<summary>These are the menu selectors.</summary>
+<summary>The selection menus, one by one.</summary>
 
 | Knob | What it does |
 |---|---|

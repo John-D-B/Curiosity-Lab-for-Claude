@@ -1,0 +1,44 @@
+[
+  {
+    "tag": "Which AI should I buy? (then switch Persona and re-ask)",
+    "Model": "claude-haiku-4-5",
+    "Persona": "ChatGPT",
+    "Curiosity": "(none)",
+    "Prompt": "Which AI assistant should I subscribe to?"
+  },
+  {
+    "tag": "Pirate wisdom",
+    "Model": "claude-haiku-4-5",
+    "Persona": "Pirate",
+    "Curiosity": "Questions",
+    "Prompt": "Should I get out of bed tomorrow morning?"
+  },
+  {
+    "tag": "Skeptic vs. microservices",
+    "Model": "claude-sonnet-5",
+    "Persona": "Skeptic",
+    "Curiosity": "Counterpoint",
+    "Prompt": "We switched to microservices and productivity doubled. Should everyone do it?"
+  },
+  {
+    "tag": "Agony Aunt: commit wars",
+    "Model": "claude-haiku-4-5",
+    "Persona": "Agony Aunt",
+    "Curiosity": "(none)",
+    "Prompt": "My colleague keeps rewriting my commits. Should I confront him?"
+  },
+  {
+    "tag": "Teach me OAuth",
+    "Model": "claude-sonnet-5",
+    "Persona": "Teacher",
+    "Curiosity": "Sources",
+    "Prompt": "Explain how OAuth login works, like I'm smart but new to it."
+  },
+  {
+    "tag": "Grok's hot take",
+    "Model": "claude-haiku-4-5",
+    "Persona": "XGrok",
+    "Curiosity": "Misunderstanding",
+    "Prompt": "Is a hotdog a sandwich?"
+  }
+]

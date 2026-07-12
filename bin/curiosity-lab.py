@@ -32,7 +32,7 @@ with or endorsed by Anthropic.
 
 from __future__ import annotations
 
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 
 import datetime
 import json
@@ -348,6 +348,15 @@ class Workbench(tk.Tk):
         self.after(50, self._pump)
 
     # ---- UI --------------------------------------------------------------
+    @staticmethod
+    def _fit_width(tags, minimum=12):
+        """Combobox width in Tk character units that just fits the longest
+        tag. Measured in pixels: character units assume average-width
+        glyphs, which overshoots for mostly-lowercase tags."""
+        f = tkfont.nametofont("TkDefaultFont")
+        unit = max(1, f.measure("0"))
+        return max(minimum, max(map(f.measure, tags)) // unit + 1)
+
     def _build_ui(self):
         top = ttk.Frame(self, padding=(12, 10, 12, 6))
         top.pack(fill="x")
@@ -365,10 +374,12 @@ class Workbench(tk.Tk):
             self._config_errors.append(err)
         ttk.Label(top, text="Persona:").pack(side="left")
         self.persona = tk.StringVar(value=next(iter(self.personas)))
+        # Width tracks the longest tag, so long persona names aren't clipped.
         self.persona_box = ttk.Combobox(top, textvariable=self.persona,
                                         values=list(self.personas),
                                         height=len(self.personas),
-                                        state="readonly", width=12)
+                                        state="readonly",
+                                        width=self._fit_width(self.personas))
         self.persona_box.pack(side="left", padx=(4, 12))
 
         self.curiosities, err = load_choices(CURIOSITIES_FILE,
@@ -380,7 +391,8 @@ class Workbench(tk.Tk):
         self.curiosity_box = ttk.Combobox(top, textvariable=self.curiosity,
                                           values=[NO_CURIOSITY] + list(self.curiosities),
                                           height=len(self.curiosities) + 1,
-                                          state="readonly", width=12)
+                                          state="readonly",
+                                          width=self._fit_width(self.curiosities))
         self.curiosity_box.pack(side="left", padx=4)
 
         ttk.Label(top, text="Size:").pack(side="left", padx=(12, 0))
@@ -692,10 +704,12 @@ class Workbench(tk.Tk):
                 self._append(f"[{err}]\n", "note")
         self.persona_box["values"] = list(self.personas)
         self.persona_box["height"] = len(self.personas)
+        self.persona_box["width"] = self._fit_width(self.personas)
         if self.persona.get() not in self.personas:
             self.persona.set(next(iter(self.personas)))
         self.curiosity_box["values"] = [NO_CURIOSITY] + list(self.curiosities)
         self.curiosity_box["height"] = len(self.curiosities) + 1
+        self.curiosity_box["width"] = self._fit_width(self.curiosities)
         if (self.curiosity.get() != NO_CURIOSITY
                 and self.curiosity.get() not in self.curiosities):
             self.curiosity.set(NO_CURIOSITY)

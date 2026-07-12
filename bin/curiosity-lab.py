@@ -32,7 +32,7 @@ with or endorsed by Anthropic.
 
 from __future__ import annotations
 
-__version__ = "2.5.0"
+__version__ = "2.6.0"
 
 import datetime
 import json
@@ -42,6 +42,7 @@ import re
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
+import webbrowser
 from tkinter import ttk, scrolledtext, filedialog
 
 try:
@@ -60,6 +61,19 @@ PRICING = {
 }
 DEFAULT_MODEL = "claude-haiku-4-5"   # cheapest — the sensible default for practice
 MAX_TOKENS = 4096
+
+# Server-side web tools (v2.6.0), declared per-request when the checkboxes
+# are on. The dated type tags are Anthropic's frozen contract versions, not
+# build stamps; the basic variants below run on every model in PRICING.
+# Search carries a per-use surcharge; fetch bills only the tokens the
+# fetched page occupies. Update SEARCH_COST with Anthropic's price list —
+# the checkbox label and the meter both read it.
+SEARCH_COST = 10.0 / 1000            # USD per search
+SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search",
+               "max_uses": 5}
+FETCH_TOOL = {"type": "web_fetch_20250910", "name": "web_fetch",
+              "max_uses": 5, "citations": {"enabled": True},
+              "max_content_tokens": 25_000}   # guard against runaway PDFs
 
 FONT_FAMILY = "Segoe UI"             # Tk substitutes the system font on macOS
 MONO_FAMILY = "Courier New"          # for `code` spans
@@ -223,7 +237,11 @@ SETTINGS_ALIASES = {"model": "model", "models": "model",
                     "geometry": "geometry", "window": "geometry",
                     "position": "geometry",
                     "apikey": "apikey", "api-key": "apikey",
-                    "keyfile": "apikey"}
+                    "keyfile": "apikey",
+                    "search": "search", "websearch": "search",
+                    "web-search": "search",
+                    "fetch": "fetch", "webfetch": "fetch",
+                    "web-fetch": "fetch"}
 
 
 def normalize_keys(raw, notes, source):
@@ -267,6 +285,20 @@ def match_tag(value, tags):
     """Case-insensitive tag lookup; returns the canonical tag or None."""
     lookup = {t.lower(): t for t in tags}
     return lookup.get(str(value).strip().lower())
+
+
+def parse_bool(value):
+    """A forgiving boolean for settings values: JSON true/false plus the
+    usual spellings. Returns None when unparseable, so the caller can
+    report it instead of guessing."""
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("true", "on", "yes", "1"):
+        return True
+    if text in ("false", "off", "no", "0"):
+        return False
+    return None
 
 
 class RoundButton(tk.Canvas):
@@ -326,6 +358,8 @@ class Workbench(tk.Tk):
         self.spend = 0.0                # running USD estimate this session
         self.q: queue.Queue = queue.Queue()
         self.streaming = False
+        self._web_used_last_turn = False   # drives the evidence-drop note
+        self._link_seq = 0                 # unique Tk tag per clickable URL
 
         self._build_ui()
         # The app picks its own size: wide enough that the top bar always
@@ -372,7 +406,8 @@ class Workbench(tk.Tk):
         self.personas, err = load_choices(PERSONAS_FILE, DEFAULT_PERSONAS)
         if err:
             self._config_errors.append(err)
-        ttk.Label(top, text="Persona:").pack(side="left")
+        persona_label = ttk.Label(top, text="Persona:")
+        persona_label.pack(side="left")
         self.persona = tk.StringVar(value=next(iter(self.personas)))
         # Width tracks the longest tag, so long persona names aren't clipped.
         self.persona_box = ttk.Combobox(top, textvariable=self.persona,
@@ -417,11 +452,52 @@ class Workbench(tk.Tk):
         self.demos_btn = ttk.Button(top, text="Demos",
                                     command=self._pick_demo)
         self.demos_btn.pack(side="left", padx=4)
-        ttk.Button(top, text="New", command=self._reset).pack(side="left", padx=4)
+        # New is the other big-deal button — same green chrome as Send: it
+        # wipes the conversation (and the web checkboxes) for a clean run.
+        self.update_idletasks()
+        new_font = tkfont.nametofont("TkDefaultFont").copy()
+        new_font.configure(weight="bold")
+        RoundButton(top, text="New", command=self._reset, font=new_font,
+                    width=self.demos_btn.winfo_reqwidth(),
+                    height=self.demos_btn.winfo_reqheight(),
+                    v_inset=3).pack(side="left", padx=4)
+
+        # The two server-side web tools, one checkbox each — the UI mirrors
+        # the API mechanism split (fetch is free beyond tokens; search
+        # carries a surcharge). Both default off: the control experiment.
+        # The block sits aligned under the Persona: label (measured, not
+        # guessed, so it tracks combobox widths), introduced by a vertical
+        # separator as a visual guide; the right edge stays free for
+        # future buttons. Inside the block the checkboxes stay
+        # left-aligned so the boxes line up vertically.
+        webrow = ttk.Frame(self, padding=(12, 2, 12, 4))
+        webrow.pack(fill="x")
+        self.update_idletasks()   # top row must be laid out to measure it
+        offset = max(0, persona_label.winfo_x() - 12)
+        # A thin outline groups the pair; it replaces the earlier separator.
+        checks = ttk.Frame(webrow, borderwidth=1, relief="solid",
+                           padding=(8, 3))
+        checks.pack(side="left", padx=(offset, 0))
+        self.fetch = tk.BooleanVar(value=False)
+        self.search = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            checks, variable=self.fetch,
+            text="Use Internet web-fetch API, for all URLs in this dialog "
+                 "(no extra cost)").pack(anchor="w")
+        ttk.Checkbutton(
+            checks, variable=self.search,
+            text="Use Internet web-search API / search engine "
+                 f"(extra cost: ${SEARCH_COST:.2f} per search)").pack(anchor="w")
+
+        # Transcript and entry share a vertical PanedWindow: the sash
+        # between them can be dragged to grow the input area for long,
+        # multi-line prompts.
+        self.paned = ttk.PanedWindow(self, orient="vertical")
 
         # All fonts are set centrally by _apply_font_size(); only the
         # colors live here.
-        self.view = scrolledtext.ScrolledText(self, wrap="word", state="disabled",
+        self.view = scrolledtext.ScrolledText(self.paned, wrap="word",
+                                              state="disabled",
                                               padx=8, pady=6)
         self.view.tag_config("user", foreground="#1a7a55")
         self.view.tag_config("assistant", foreground="#222222")
@@ -434,13 +510,16 @@ class Workbench(tk.Tk):
             self.view.tag_config(t, foreground="#222222")
         self.view.tag_config("md_code", foreground="#1a1a1a",
                              background="#f2f2f2")
+        self.view.tag_config("md_codeblock", foreground="#1a1a1a",
+                             background="#f2f2f2",
+                             lmargin1=12, lmargin2=12)
         self.view.tag_config("md_rule", foreground="#999999")
         # Marks where the current reply begins, so the raw streamed text can
         # be re-rendered as Markdown once the reply is complete.
         self.view.mark_set("reply_start", "end-1c")
         self.view.mark_gravity("reply_start", "left")
 
-        bottom = ttk.Frame(self, padding=(12, 4, 12, 10))
+        bottom = ttk.Frame(self.paned, padding=(0, 4, 0, 10))
         # The button column is packed FIRST (from the right) so it always
         # keeps its size; the entry's nominal width stays small so its
         # font-dependent requested width can't squeeze the buttons out at
@@ -464,20 +543,21 @@ class Workbench(tk.Tk):
         quit_btn.pack()
         self.entry = tk.Text(bottom, height=3, wrap="word", width=10,
                              padx=8, pady=6)
-        self.entry.pack(side="left", fill="x", expand=True)
+        self.entry.pack(side="left", fill="both", expand=True)
         self.entry.bind("<Return>", self._on_return)   # Enter sends; Shift+Enter = newline
 
         self.status = tk.StringVar(value="ready — $0.000000 this session")
         status_bar = ttk.Label(self, textvariable=self.status, anchor="w",
                                relief="sunken", padding=3)
 
-        # Pack order = squeeze priority: the cost meter and the button row
-        # claim their space FIRST, and the transcript (packed last, packed
-        # expanding) absorbs any height shortfall — nothing vital can be
-        # clipped off the bottom again.
+        # Pack order = squeeze priority: the cost meter claims its space
+        # FIRST, then the PanedWindow absorbs the rest — transcript above
+        # (weight 1: it takes any height surplus), entry row below. The
+        # sash between the panes is the drag handle.
         status_bar.pack(fill="x", side="bottom")
-        bottom.pack(fill="x", side="bottom")
-        self.view.pack(fill="both", expand=True, padx=12, pady=(2, 4))
+        self.paned.pack(fill="both", expand=True, padx=12, pady=(2, 0))
+        self.paned.add(self.view, weight=1)
+        self.paned.add(bottom, weight=0)
 
         self._apply_font_size()
 
@@ -496,6 +576,7 @@ class Workbench(tk.Tk):
         self.view.tag_config("md_bolditalic",
                              font=(FONT_FAMILY, size, "bold italic"))
         self.view.tag_config("md_code", font=(MONO_FAMILY, size))
+        self.view.tag_config("md_codeblock", font=(MONO_FAMILY, size - 1))
         self.view.tag_config("md_h1", font=(FONT_FAMILY, size + 4, "bold"))
         self.view.tag_config("md_h2", font=(FONT_FAMILY, size + 2, "bold"))
         self.view.tag_config("md_h3", font=(FONT_FAMILY, size + 1, "bold"))
@@ -547,9 +628,20 @@ class Workbench(tk.Tk):
         if "model" in settings:
             raw_model = str(settings["model"]).strip()
             model = raw_model.replace(".", "-")
+            if model not in PRICING:
+                # A bare family name ("claude-sonnet", "sonnet") resolves to
+                # its PRICING entry, so config files aren't locked to
+                # version numbers across model bumps. An ambiguous name
+                # ("claude" matches everything) resolves to the CHEAPEST
+                # match. The combobox shows what was resolved.
+                matches = [k for k in PRICING
+                           if k.startswith(model)
+                           or k.startswith("claude-" + model)]
+                if matches:
+                    model = min(matches, key=lambda k: PRICING[k])
             if model in PRICING:
                 self.model.set(model)
-                if model != raw_model:
+                if "." in raw_model:
                     notes.append(f"{source}: model {raw_model!r} is "
                                  f"not a valid model ID — using '{model}'; "
                                  f"please fix the file")
@@ -616,6 +708,14 @@ class Workbench(tk.Tk):
             else:
                 notes.append(f"{source}: me-file {raw_path!r} "
                              f"not found — skipped")
+        for key, var in (("fetch", self.fetch), ("search", self.search)):
+            if key in settings:
+                val = parse_bool(settings[key])
+                if val is None:
+                    notes.append(f"{source}: {key} must be true or false "
+                                 f"— keeping {var.get()}")
+                else:
+                    var.set(val)
         prompt = str(settings.get("prompt") or "").strip()
         if prompt:
             self.entry.delete("1.0", "end")
@@ -644,8 +744,18 @@ class Workbench(tk.Tk):
 
     def _render_markdown(self, text):
         lines = text.rstrip("\n").split("\n")
+        in_code = False
         for i, line in enumerate(lines):
             nl = "\n" if i < len(lines) - 1 else ""
+            # Fenced code blocks: the ``` fence lines are dropped, the
+            # lines between them render verbatim in block style — no
+            # inline Markdown parsing inside code.
+            if re.match(r"\s*```", line):
+                in_code = not in_code
+                continue
+            if in_code:
+                self._append(line + nl, "md_codeblock")
+                continue
             heading = re.match(r"(#{1,6})\s+(.*)", line)
             bullet = re.match(r"(\s*)[-*]\s+(.*)", line)
             if heading:
@@ -683,6 +793,9 @@ class Workbench(tk.Tk):
         if self.streaming:
             return
         self.history.clear()
+        self._web_used_last_turn = False   # New clears the whole conversation
+        self.fetch.set(False)              # web access is per-conversation:
+        self.search.set(False)             # a clean run starts offline
         if self.log and self.log[-1]["kind"] != "divider":
             self.log.append({"kind": "divider"})   # Save keeps the whole session
         self.view.configure(state="normal")
@@ -715,10 +828,10 @@ class Workbench(tk.Tk):
             self.curiosity.set(NO_CURIOSITY)
 
     # ---- send / stream ---------------------------------------------------
-    def _show_user_turn(self, text, suffix, persona_hint=False):
+    def _show_user_turn(self, text, suffix, persona_hint=False, web_note=""):
         """Transcript display for an outgoing turn: the You: header, then
-        the injected persona, me-file, and rider as indented annotation
-        lines — visible, not hidden — then the user's own words."""
+        the injected persona, me-file, web tools, and rider as indented
+        annotation lines — visible, not hidden — then the user's own words."""
         persona = self.persona.get()
         self._append("\nYou:\n", "user")
         if persona_hint:
@@ -729,6 +842,8 @@ class Workbench(tk.Tk):
         if self.me_text:
             self._append(f"  [Me-file “{self.me_name}” rides along, "
                          f"~{len(self.me_text) // 4} tokens]\n", "meta")
+        if web_note:
+            self._append(f"  [{web_note}]\n", "meta")
         if suffix:
             self._append("  " + suffix.strip() + "\n", "curious")
         self._append("\n" + text + "\n", "prompt")
@@ -779,23 +894,47 @@ class Workbench(tk.Tk):
         self._last_prompt = text
         persona_hint = self._persona_changed_midchat()
         suffix = self._current_suffix()
+        # The prior turn's search results arrived as encrypted replay blobs;
+        # this app resends plain text only, so the model keeps its summary
+        # but loses the source pages. Say so, once, where it happens.
+        if self._web_used_last_turn and self.history:
+            evidence = ("search evidence from the prior turn was not resent "
+                        "— the model keeps its summary, not the sources")
+            self._append(f"\n[{evidence}]\n", "note")
+            self.log.append({"kind": "note", "text": evidence})
+        self._web_used_last_turn = False
+        tools = ([FETCH_TOOL] if self.fetch.get() else []) \
+              + ([SEARCH_TOOL] if self.search.get() else [])
+        web_note = self._web_annotation()
         self.history.append({"role": "user", "content": text + suffix})
         self.log.append({"kind": "user", "text": text + suffix,
                          "persona": self.persona.get(),
                          "me": self.me_name,
-                         "curiosity": self.curiosity.get() if suffix else ""})
-        self._show_user_turn(text, suffix, persona_hint)
+                         "curiosity": self.curiosity.get() if suffix else "",
+                         "web": web_note})
+        self._show_user_turn(text, suffix, persona_hint, web_note)
 
         self.streaming = True
         self.status.set("thinking…")
         threading.Thread(
             target=self._worker,
             args=(self.model.get(), self._current_system(),
-                  list(self.history)),
+                  list(self.history), tools),
             daemon=True,
         ).start()
 
-    def _worker(self, model, system, messages):
+    def _web_annotation(self):
+        """The outgoing-turn annotation for enabled web tools: what is
+        armed and what each mechanism costs."""
+        parts = []
+        if self.search.get():
+            parts.append(f"search ≤{SEARCH_TOOL['max_uses']} "
+                         f"@ ${SEARCH_COST:.2f}")
+        if self.fetch.get():
+            parts.append(f"fetch ≤{FETCH_TOOL['max_uses']}, tokens only")
+        return "Web access enabled: " + ", ".join(parts) if parts else ""
+
+    def _worker(self, model, system, messages, tools=None):
         """Runs OFF the UI thread (Tkinter isn't thread-safe). Pushes
         ('text', chunk) / ('done', message) / ('error', str) onto the queue
         for the main thread to render via _pump()."""
@@ -805,6 +944,9 @@ class Workbench(tk.Tk):
                 max_tokens=MAX_TOKENS,
                 system=system,
                 messages=messages,
+                # Server-side tools run mid-request on Anthropic's side; the
+                # stream simply pauses while a search or fetch executes.
+                **({"tools": tools} if tools else {}),
                 # We deliberately omit `thinking` — valid on every model here
                 # (Fable runs adaptive, Opus runs without). On Fable 5 a safety
                 # refusal would surface below as stop_reason == "refusal"; a
@@ -844,29 +986,120 @@ class Workbench(tk.Tk):
             # Drop the refused user turn too — left in place it would be
             # re-sent (re-billed, and likely re-refused) on every later turn.
             self.history.pop()
-            self.log.append({"kind": "note", "text": "refused by safety "
-                             "classifier — turn removed from history"})
-            self._append("\n[refused by safety classifier — turn removed from "
-                         "history; a production Fable call would fall back to "
-                         "Opus 4.8 here]\n", "note")
+            details = getattr(msg, "stop_details", None)
+            cat = getattr(details, "category", None) if details else None
+            expl = getattr(details, "explanation", None) if details else None
+            note = ("refused by safety classifier"
+                    + (f" (category: {cat})" if cat else "")
+                    + " — turn removed from history; a production Fable "
+                    "call would fall back to Opus 4.8 here")
+            self.log.append({"kind": "note", "text": note})
+            self._append(f"\n[{note}]\n", "note")
+            if expl:
+                self._append(f"  [classifier explanation: {expl}]\n", "note")
+                self.log.append({"kind": "note",
+                                 "text": f"classifier explanation: {expl}"})
         else:
             reply = "".join(b.text for b in msg.content if b.type == "text")
             self.history.append({"role": "assistant", "content": reply})
             self.log.append({"kind": "assistant", "model": model,
                              "text": reply})
             self._rerender_reply(reply)
+            self._note_web_activity(msg)
+            searches, fetches = self._web_usage(msg)
+            self._web_used_last_turn = bool(searches or fetches)
         self._add_cost(model, msg)
         self._append("\n", "assistant")
         self._finish()
 
+    def _note_web_activity(self, msg):
+        """Post-hoc transcript notes for server-side tool use, read from
+        the final message: the model's server_tool_use blocks say what was
+        ATTEMPTED, the paired result blocks say whether it worked (a fetch
+        of a model-invented URL is refused, for example), and citation
+        blocks say which sources the reply leaned on. The live stream
+        itself only shows a pause."""
+        failures = {}
+        for b in msg.content:
+            if getattr(b, "type", "") in ("web_search_tool_result",
+                                          "web_fetch_tool_result"):
+                code = getattr(getattr(b, "content", None),
+                               "error_code", None)
+                if code:
+                    failures[b.tool_use_id] = code
+        notes = []   # (text, clickable url or None, suffix, display tag)
+        for b in msg.content:
+            if getattr(b, "type", "") == "server_tool_use":
+                inp = dict(getattr(b, "input", None) or {})
+                fail = failures.get(b.id)
+                suffix = f"  ({fail})" if fail else ""
+                if b.name == "web_search":
+                    verb = "search failed" if fail else "searched"
+                    notes.append((f'{verb}: "{inp.get("query", "?")}"',
+                                  None, suffix, "note" if fail else "curious"))
+                elif b.name == "web_fetch":
+                    verb = "fetch failed" if fail else "fetched"
+                    notes.append((f"{verb}: ", inp.get("url", "?"),
+                                  suffix, "note" if fail else "curious"))
+        seen = []
+        for b in msg.content:
+            for c in (getattr(b, "citations", None) or []):
+                url = getattr(c, "url", None)
+                if url and url not in seen:
+                    seen.append(url)
+                    notes.append(("source: ", url, "", "curious"))
+        if notes:
+            self._append("\n", "curious")   # never glue onto the reply line
+        for text, url, suffix, tag in notes:
+            self._append(f"  [{text}", tag)
+            if url:
+                self._append_link(url, tag)
+            self._append(f"{suffix}]\n", tag)
+            self.log.append({"kind": "note",
+                             "text": text + (url or "") + suffix})
+
+    def _append_link(self, url, tag):
+        """Insert url into the transcript as a clickable link — underlined,
+        hand cursor, opens the default browser. Pure rendering: no tool,
+        no API involvement."""
+        name = f"link{self._link_seq}"
+        self._link_seq += 1
+        self.view.tag_config(name, underline=True)
+        self.view.tag_bind(name, "<Button-1>",
+                           lambda e, u=url: webbrowser.open(u))
+        self.view.tag_bind(name, "<Enter>",
+                           lambda e: self.view.configure(cursor="hand2"))
+        self.view.tag_bind(name, "<Leave>",
+                           lambda e: self.view.configure(cursor=""))
+        self._append(url, (tag, name))
+
+    @staticmethod
+    def _web_usage(msg):
+        """(searches, fetches) from the usage block — both 0 when no
+        server tool ran (the field is absent then)."""
+        st = getattr(msg.usage, "server_tool_use", None)
+        return (getattr(st, "web_search_requests", 0) or 0,
+                getattr(st, "web_fetch_requests", 0) or 0)
+
     def _add_cost(self, model, msg):
+        """The meter: one parenthesized sub-cost per mechanism — tokens,
+        then searches — and the session total sums them. Zero counts are
+        not shown; fetched pages already appear inside the token count."""
         rate_in, rate_out = PRICING.get(model, (0.0, 0.0))
         u = msg.usage
-        cost = (u.input_tokens * rate_in + u.output_tokens * rate_out) / 1_000_000
-        self.spend += cost
-        self.status.set(
-            f"last: in {u.input_tokens} / out {u.output_tokens} tok  "
-            f"(+${cost:.6f})    session total: ${self.spend:.6f}")
+        token_cost = (u.input_tokens * rate_in
+                      + u.output_tokens * rate_out) / 1_000_000
+        searches, fetches = self._web_usage(msg)
+        search_cost = searches * SEARCH_COST
+        self.spend += token_cost + search_cost
+        parts = [f"Tokens: In {u.input_tokens} / Out {u.output_tokens} "
+                 f"(+${token_cost:.6f})"]
+        if searches:
+            parts.append(f"Searches: {searches} (+${search_cost:.6f})")
+        if fetches:
+            parts.append(f"Fetches: {fetches} (tokens only)")
+        self.status.set("Last API call —  " + "    |    ".join(parts)
+                        + f"    |    Session total: ${self.spend:.6f}")
 
     def _finish(self):
         self.streaming = False
@@ -1048,6 +1281,8 @@ class Workbench(tk.Tk):
                     lines.append(f"- Me-file: {entry['me']}")
                 if entry["curiosity"]:
                     lines.append(f"- Curiosity: {entry['curiosity']}")
+                if entry.get("web"):
+                    lines.append(f"- {entry['web']}")
                 lines.append("")
                 lines += [f"> {ln}".rstrip() for ln in entry["text"].split("\n")]
                 lines.append("")

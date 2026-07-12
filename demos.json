@@ -1,5 +1,23 @@
 [
   {
+    "tag": "Curiosity Lab: Introspection",
+    "Model": "claude-haiku-4-5",
+    "Persona": "Claude",
+    "Curiosity": "Sources",
+    "Fetch": true,
+    "Search": false,
+    "Prompt": "Show me my web page: https://github.com/John-D-B/Curiosity-Lab-for-Claude"
+  },
+  {
+    "tag": "Curiosity Lab: Unique?",
+    "Model": "haiku",
+    "Persona": "Claude",
+    "Curiosity": "Sources",
+    "Fetch": true,
+    "Search": true,
+    "Prompt": "Search all use-cases of 'Curiosity Lab' or 'Curiosity Labs' as a brand or title. Include GitHub and open-source projects - also using this URL: 'https://api.github.com/search/repositories?q=curiosity+lab+claude+in:name'  Introspection: Is this application anywhere in these lists?"
+  },
+  {
     "tag": "Which AI should I buy? (then switch Persona and re-ask)",
     "Model": "claude-haiku-4-5",
     "Persona": "ChatGPT",
@@ -40,5 +58,23 @@
     "Persona": "XGrok",
     "Curiosity": "Misunderstanding",
     "Prompt": "Is a hotdog a sandwich?"
+  },
+  {
+    "tag": "Live web lookup (search + fetch, about $0.01)",
+    "Model": "claude-haiku-4-5",
+    "Persona": "Concise",
+    "Curiosity": "(none)",
+    "Fetch": true,
+    "Search": true,
+    "Prompt": "Look up Anthropic's current API prices for the Claude models. This app assumes haiku costs $1 in / $5 out per million tokens - is that still right?"
+  },
+  {
+    "tag": "Python programming (then switch Models and re-ask)",
+    "Model": "claude-haiku-4-5",
+    "Persona": "Claude",
+    "Curiosity": "Sources",
+    "Fetch": false,
+    "Search": false,
+    "Prompt": "Write a small Python script to calculate or analyze the digits of PI, to determine at what position does a given digit sequence first appears, skipping non-digits. Then run it with this sequence: 1776-07-04"
   }
 ]

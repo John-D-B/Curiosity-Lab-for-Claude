@@ -11,7 +11,7 @@
 
 **PASS. Zero findings from all three scanners.**
 
-- Bandit: **no issues identified** (883 lines of code scanned, no `#nosec` suppressions).
+- Bandit: **no issues identified** (1'041 lines of code scanned, no `#nosec` suppressions).
 - Semgrep (`p/python`, `p/security-audit`, `p/command-injection`): **no findings**.
 - pip-audit: **no known vulnerabilities** in dependencies.
 - The security-relevant design points a reviewer should know are therefore all in<br/>
@@ -38,7 +38,7 @@ Two places genuinely cross that boundary:
 
 | Component | File | Tool |
 |---|---|---|
-| Main tool | `bin/curiosity-lab.py` (977 lines) | Bandit, Semgrep |
+| Main tool | `bin/curiosity-lab.py` (1'041 lines) | Bandit, Semgrep |
 | Dependencies | `bin/requirements.txt` (`anthropic`) | pip-audit |
 
 ### Out of scope

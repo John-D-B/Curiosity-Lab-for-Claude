@@ -18,5 +18,6 @@ zChats/
 
 # - Never commit API keys:
 apikey.txt
+api-key.txt
 *.key
 

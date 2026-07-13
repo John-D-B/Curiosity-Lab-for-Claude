@@ -32,7 +32,7 @@ with or endorsed by Anthropic.
 
 from __future__ import annotations
 
-__version__ = "2.6.0"
+__version__ = "2.7.0"
 
 import datetime
 import json
@@ -40,6 +40,7 @@ import os
 import queue
 import re
 import threading
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 import webbrowser
@@ -74,6 +75,18 @@ SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search",
 FETCH_TOOL = {"type": "web_fetch_20250910", "name": "web_fetch",
               "max_uses": 5, "citations": {"enabled": True},
               "max_content_tokens": 25_000}   # guard against runaway PDFs
+
+# Code execution (v2.7.0): an Anthropic-hosted Linux sandbox (Python 3.11 +
+# bash, 1 CPU / 5 GiB, NO internet). Free up to the org's monthly container-
+# hour allowance, then $0.05/hour — but the API does not report container
+# time in `usage`, so the meter can COUNT runs, not price them. GA, no beta
+# header; every model in PRICING accepts the tool type.
+EXEC_TOOL = {"type": "code_execution_20260521", "name": "code_execution"}
+
+# A server-tool turn can pause (stop_reason "pause_turn") and be resumed by
+# resending the paused assistant content. Cap the resume loop so a runaway
+# can't spin forever.
+MAX_CONTINUATIONS = 5
 
 FONT_FAMILY = "Segoe UI"             # Tk substitutes the system font on macOS
 MONO_FAMILY = "Courier New"          # for `code` spans
@@ -241,7 +254,9 @@ SETTINGS_ALIASES = {"model": "model", "models": "model",
                     "search": "search", "websearch": "search",
                     "web-search": "search",
                     "fetch": "fetch", "webfetch": "fetch",
-                    "web-fetch": "fetch"}
+                    "web-fetch": "fetch",
+                    "sandbox": "sandbox", "python": "sandbox",
+                    "exec": "sandbox", "code": "sandbox"}
 
 
 def normalize_keys(raw, notes, source):
@@ -340,6 +355,14 @@ class RoundButton(tk.Canvas):
                 and 0 <= event.y <= self.winfo_height()):
             self._command()
 
+    def set_mode(self, text, fill, active_fill, command):
+        """Re-skin the button in place — Send ⇄ Stop. Width is fixed at
+        construction; the two labels are the same length, so no resize."""
+        self._command = command
+        self._fill, self._active = fill, active_fill
+        self.itemconfig(self.shape, fill=fill)
+        self.itemconfig(self.label, text=text)
+
 
 class Workbench(tk.Tk):
     def __init__(self, verbose=False):
@@ -358,6 +381,12 @@ class Workbench(tk.Tk):
         self.spend = 0.0                # running USD estimate this session
         self.q: queue.Queue = queue.Queue()
         self.streaming = False
+        self._spinning = False             # drives the live activity spinner
+        self._turn_start = 0.0
+        self._cancel = False               # Stop button → abort the turn
+        self._active_stream = None         # live stream, for force-close on Stop
+        self._gen = 0                      # turn generation; drops abandoned output
+        self._sent_model = DEFAULT_MODEL   # model of the in-flight turn
         self._web_used_last_turn = False   # drives the evidence-drop note
         self._link_seq = 0                 # unique Tk tag per clickable URL
 
@@ -480,6 +509,7 @@ class Workbench(tk.Tk):
         checks.pack(side="left", padx=(offset, 0))
         self.fetch = tk.BooleanVar(value=False)
         self.search = tk.BooleanVar(value=False)
+        self.sandbox = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             checks, variable=self.fetch,
             text="Use Internet web-fetch API, for all URLs in this dialog "
@@ -488,6 +518,10 @@ class Workbench(tk.Tk):
             checks, variable=self.search,
             text="Use Internet web-search API / search engine "
                  f"(extra cost: ${SEARCH_COST:.2f} per search)").pack(anchor="w")
+        ttk.Checkbutton(
+            checks, variable=self.sandbox,
+            text="Use API Linux Sandbox (free tier, then $0.05/hr)"
+            ).pack(anchor="w")
 
         # Transcript and entry share a vertical PanedWindow: the sash
         # between them can be dragged to grow the input area for long,
@@ -514,6 +548,14 @@ class Workbench(tk.Tk):
                              background="#f2f2f2",
                              lmargin1=12, lmargin2=12)
         self.view.tag_config("md_rule", foreground="#999999")
+        # The transcript is read-only (state="disabled") but must stay
+        # selectable and copyable — especially the code blocks, whose
+        # background otherwise hides the selection highlight. Raise 'sel'
+        # above every tag, and bind copy explicitly so Cmd/Ctrl+C works
+        # even in a disabled Text widget.
+        self.view.tag_raise("sel")
+        for seq in ("<Command-c>", "<Control-c>"):
+            self.view.bind(seq, self._copy_selection)
         # Marks where the current reply begins, so the raw streamed text can
         # be re-rendered as Markdown once the reply is complete.
         self.view.mark_set("reply_start", "end-1c")
@@ -708,7 +750,8 @@ class Workbench(tk.Tk):
             else:
                 notes.append(f"{source}: me-file {raw_path!r} "
                              f"not found — skipped")
-        for key, var in (("fetch", self.fetch), ("search", self.search)):
+        for key, var in (("fetch", self.fetch), ("search", self.search),
+                         ("sandbox", self.sandbox)):
             if key in settings:
                 val = parse_bool(settings[key])
                 if val is None:
@@ -796,6 +839,7 @@ class Workbench(tk.Tk):
         self._web_used_last_turn = False   # New clears the whole conversation
         self.fetch.set(False)              # web access is per-conversation:
         self.search.set(False)             # a clean run starts offline
+        self.sandbox.set(False)            # ...and without the sandbox
         if self.log and self.log[-1]["kind"] != "divider":
             self.log.append({"kind": "divider"})   # Save keeps the whole session
         self.view.configure(state="normal")
@@ -904,7 +948,8 @@ class Workbench(tk.Tk):
             self.log.append({"kind": "note", "text": evidence})
         self._web_used_last_turn = False
         tools = ([FETCH_TOOL] if self.fetch.get() else []) \
-              + ([SEARCH_TOOL] if self.search.get() else [])
+              + ([SEARCH_TOOL] if self.search.get() else []) \
+              + ([EXEC_TOOL] if self.sandbox.get() else [])
         web_note = self._web_annotation()
         self.history.append({"role": "user", "content": text + suffix})
         self.log.append({"kind": "user", "text": text + suffix,
@@ -915,16 +960,22 @@ class Workbench(tk.Tk):
         self._show_user_turn(text, suffix, persona_hint, web_note)
 
         self.streaming = True
-        self.status.set("thinking…")
+        self._cancel = False
+        self._gen += 1                       # this turn's id; older output is dropped
+        self._sent_model = self.model.get()
+        self.send_btn.set_mode("Stop", "#e0a84e", "#c8923a", self._stop)
+        self._spinning = True
+        self._turn_start = time.monotonic()
+        self._spin()
         threading.Thread(
             target=self._worker,
-            args=(self.model.get(), self._current_system(),
+            args=(self._gen, self._sent_model, self._current_system(),
                   list(self.history), tools),
             daemon=True,
         ).start()
 
     def _web_annotation(self):
-        """The outgoing-turn annotation for enabled web tools: what is
+        """The outgoing-turn annotation for enabled server tools: what is
         armed and what each mechanism costs."""
         parts = []
         if self.search.get():
@@ -932,44 +983,88 @@ class Workbench(tk.Tk):
                          f"@ ${SEARCH_COST:.2f}")
         if self.fetch.get():
             parts.append(f"fetch ≤{FETCH_TOOL['max_uses']}, tokens only")
-        return "Web access enabled: " + ", ".join(parts) if parts else ""
+        if self.sandbox.get():
+            parts.append("Linux sandbox (free tier, then $0.05/hr)")
+        return "Tools enabled: " + ", ".join(parts) if parts else ""
 
-    def _worker(self, model, system, messages, tools=None):
+    def _worker(self, gen, model, system, messages, tools=None):
         """Runs OFF the UI thread (Tkinter isn't thread-safe). Pushes
-        ('text', chunk) / ('done', message) / ('error', str) onto the queue
-        for the main thread to render via _pump()."""
+        (gen, kind, payload) onto the queue; _pump drops any gen that is no
+        longer the current turn — so a worker abandoned by Stop (or New)
+        can finish blocked in the SDK and its late output is simply ignored.
+
+        A server-tool turn can stop with stop_reason 'pause_turn' when the
+        server-side loop hits its own iteration limit mid-work. We resume it
+        by appending the paused assistant content and re-streaming, up to
+        MAX_CONTINUATIONS, so a long search/fetch/code turn finishes instead
+        of being silently truncated."""
+        stream = None
         try:
-            with self.client.messages.stream(
-                model=model,
-                max_tokens=MAX_TOKENS,
-                system=system,
-                messages=messages,
-                # Server-side tools run mid-request on Anthropic's side; the
-                # stream simply pauses while a search or fetch executes.
-                **({"tools": tools} if tools else {}),
-                # We deliberately omit `thinking` — valid on every model here
-                # (Fable runs adaptive, Opus runs without). On Fable 5 a safety
-                # refusal would surface below as stop_reason == "refusal"; a
-                # production Fable call would add the server-side `fallbacks`
-                # parameter here so Opus 4.8 rescues the turn — exactly what you
-                # watched happen in the Desktop App.
-            ) as stream:
-                for chunk in stream.text_stream:
-                    self.q.put(("text", chunk))
-                # Carry the send-time model with the result: the combobox may
-                # have been switched mid-stream, and the bill belongs to the
-                # model that actually served the request.
-                self.q.put(("done", (model, stream.get_final_message())))
+            convo = list(messages)
+            final = None
+            for _ in range(MAX_CONTINUATIONS + 1):
+                with self.client.messages.stream(
+                    model=model,
+                    max_tokens=MAX_TOKENS,
+                    system=system,
+                    messages=convo,
+                    # Server-side tools run mid-request on Anthropic's side;
+                    # the stream simply pauses while a search, fetch, or code
+                    # cell executes.
+                    **({"tools": tools} if tools else {}),
+                    # We deliberately omit `thinking` — valid on every model
+                    # here (Fable runs adaptive, Opus runs without). On Fable
+                    # 5 a safety refusal surfaces below as stop_reason ==
+                    # "refusal"; a production Fable call would add the
+                    # server-side `fallbacks` parameter here so Opus 4.8
+                    # rescues the turn — exactly what you watched happen in
+                    # the Desktop App.
+                ) as stream:
+                    self._active_stream = stream   # so Stop can force-close
+                    try:
+                        for chunk in stream.text_stream:
+                            if self._cancel:
+                                break
+                            self.q.put((gen, "text", chunk))
+                    except Exception:
+                        # A Stop-triggered close() interrupts the blocked
+                        # read as an exception; if this turn was abandoned,
+                        # just exit quietly — the UI already moved on.
+                        if gen != self._gen or self._cancel:
+                            return
+                        raise
+                    if gen != self._gen or self._cancel:
+                        return   # abandoned by Stop/New — UI already finalized
+                    final = stream.get_final_message()
+                if final.stop_reason != "pause_turn":
+                    break
+                # Resume: hand the paused assistant content back and continue.
+                convo = convo + [{"role": "assistant",
+                                  "content": final.content}]
+                self.q.put((gen, "pause", None))
+            # Carry the send-time model with the result: the combobox may
+            # have been switched mid-stream, and the bill belongs to the
+            # model that actually served the request.
+            self.q.put((gen, "done", (model, final)))
         except Exception as exc:   # noqa: BLE001 — surface everything to the user
-            self.q.put(("error", f"{type(exc).__name__}: {exc}"))
+            self.q.put((gen, "error", f"{type(exc).__name__}: {exc}"))
+        finally:
+            if self._active_stream is stream:   # don't clobber a newer turn
+                self._active_stream = None
 
     def _pump(self):
         try:
             while True:
-                kind, payload = self.q.get_nowait()
+                gen, kind, payload = self.q.get_nowait()
+                if gen != self._gen:
+                    continue   # output from a stopped/superseded turn — drop
                 if kind == "text":
                     self._append(payload, "assistant")
+                elif kind == "pause":
+                    self._append("\n  [turn paused by a server tool — "
+                                 "continuing]\n", "note")
                 elif kind == "error":
+                    self._spinning = False   # stop before writing status
                     self.log.append({"kind": "note", "text": payload})
                     self._append(f"\n[{payload}]\n", "note")
                     self.status.set(f"error — see transcript    "
@@ -981,7 +1076,88 @@ class Workbench(tk.Tk):
             pass
         self.after(50, self._pump)
 
+    def _stop(self):
+        """Stop button: finalize the turn IMMEDIATELY on the UI thread, so
+        Stop is instant even when the worker is blocked deep in the SDK
+        waiting on a sandbox or search (a close() from here can't reliably
+        interrupt that blocked read). We bump the generation so the
+        abandoned worker's eventual output is dropped, read whatever the
+        stream has accumulated for an estimated bill, then best-effort
+        close the connection so the orphaned request winds down."""
+        if not self.streaming:
+            return
+        self._cancel = True
+        self._gen += 1            # abandon this turn; late worker output ignored
+        s = self._active_stream
+        snap = None
+        if s is not None:
+            try:
+                snap = s.current_message_snapshot
+            except Exception:      # noqa: BLE001 — no snapshot yet
+                snap = None
+            try:
+                s.close()
+            except Exception:      # noqa: BLE001 — best-effort interrupt
+                pass
+        self._on_stopped(self._sent_model, snap)
+
+    def _on_stopped(self, model, snap):
+        """User pressed Stop. Keep whatever text streamed as the (partial)
+        reply, mark it stopped, and post an ESTIMATED bill — the turn never
+        emitted its final usage event, so input tokens are exact but output
+        is a running count."""
+        self._spinning = False
+        reply = ""
+        if snap is not None:
+            reply = "".join(getattr(b, "text", "") for b in
+                            getattr(snap, "content", []) or []
+                            if getattr(b, "type", "") == "text")
+        if reply.strip():
+            self.history.append({"role": "assistant", "content": reply})
+            self.log.append({"kind": "assistant", "model": model,
+                             "text": reply})
+            self._rerender_reply(reply)
+        elif self.history and self.history[-1]["role"] == "user":
+            self.history.pop()   # nothing usable — don't resend a dead turn
+        self._append("\n  [stopped by user]\n", "note")
+        self.log.append({"kind": "note", "text": "stopped by user"})
+        self._add_cost_estimate(model, snap)
+        self._append("\n", "assistant")
+        self._finish()
+
+    def _add_cost_estimate(self, model, snap):
+        """Meter line for a stopped turn: same shape as _add_cost, but every
+        figure carries (est) because the final usage never arrived. Input
+        tokens are exact (set at message_start); output is the count so far;
+        any search that already ran is included."""
+        rate_in, rate_out = PRICING.get(model, (0.0, 0.0))
+        u = getattr(snap, "usage", None) if snap is not None else None
+        in_tok = getattr(u, "input_tokens", 0) or 0
+        out_tok = getattr(u, "output_tokens", 0) or 0
+        in_cost = in_tok * rate_in / 1_000_000
+        out_cost = out_tok * rate_out / 1_000_000
+        token_cost = in_cost + out_cost
+        searches = fetches = runs = 0
+        if snap is not None:
+            searches, fetches = self._web_usage(snap)
+            runs = self._code_runs(snap)
+        search_cost = searches * SEARCH_COST
+        self.spend += token_cost + search_cost
+        elapsed = time.monotonic() - self._turn_start
+        parts = [f"Elapsed: {elapsed:.1f}s (stopped)",
+                 f"Tokens: In {in_tok} (+${in_cost:.6f}) "
+                 f"/ Out {out_tok} (+${out_cost:.6f})"]
+        if searches:
+            parts.append(f"Searches: {searches} (+${search_cost:.6f})")
+        if fetches:
+            parts.append(f"Fetches: {fetches} (tokens only)")
+        if runs:
+            parts.append(f"Code runs: {runs} (free tier / $0.05/hr)")
+        self.status.set("    |    ".join(parts)
+                        + f"    |    Session total: ${self.spend:.6f} (est)")
+
     def _on_done(self, model, msg):
+        self._spinning = False   # stop before the final meter reading lands
         if msg.stop_reason == "refusal":
             # Drop the refused user turn too — left in place it would be
             # re-sent (re-billed, and likely re-refused) on every later turn.
@@ -991,8 +1167,10 @@ class Workbench(tk.Tk):
             expl = getattr(details, "explanation", None) if details else None
             note = ("refused by safety classifier"
                     + (f" (category: {cat})" if cat else "")
-                    + " — turn removed from history; a production Fable "
-                    "call would fall back to Opus 4.8 here")
+                    + " — turn removed from history; a production call "
+                    "would auto-fall-back to Opus 4.8 here. In the Lab "
+                    "the refusal is the exhibit: switch the Model knob "
+                    "and press Send to retry")
             self.log.append({"kind": "note", "text": note})
             self._append(f"\n[{note}]\n", "note")
             if expl:
@@ -1057,6 +1235,78 @@ class Workbench(tk.Tk):
             self._append(f"{suffix}]\n", tag)
             self.log.append({"kind": "note",
                              "text": text + (url or "") + suffix})
+        self._note_code_activity(msg)
+
+    def _note_code_activity(self, msg):
+        """Post-hoc notes for the Linux sandbox, read from the final message.
+        This is the 'it really executed' evidence — the live stream only
+        pauses. Two sub-tools surface here: bash (commands + stdout/stderr,
+        non-zero exit in red) and the file editor (create/edit — the actual
+        file the model WROTE, e.g. the script itself, shown regardless of
+        whether the model bothered to narrate it)."""
+        for b in msg.content:
+            t = getattr(b, "type", "")
+            if t == "server_tool_use" and b.name == "bash_code_execution":
+                cmd = dict(getattr(b, "input", None) or {}).get("command", "?")
+                self._append(f"\n  [ran: {cmd}]\n", "curious")
+                self.log.append({"kind": "note", "text": f"ran: {cmd}"})
+            elif (t == "server_tool_use"
+                  and b.name == "text_editor_code_execution"):
+                inp = dict(getattr(b, "input", None) or {})
+                cmd = inp.get("command", "")
+                path = inp.get("path", "?")
+                body = inp.get("file_text") or inp.get("new_str") or ""
+                if cmd in ("create", "str_replace", "insert") and body:
+                    verb = "wrote" if cmd == "create" else "edited"
+                    self._append(f"\n  [{verb} {path}]\n", "curious")
+                    self.log.append({"kind": "note",
+                                     "text": f"{verb} {path}"})
+                    self._append_code_block(body)
+                    # Save the full file body too, so the exported Markdown
+                    # carries the script, not just a "[wrote ...]" note.
+                    lang = "python" if str(path).endswith(".py") else ""
+                    self.log.append({"kind": "code", "lang": lang,
+                                     "text": body})
+            elif t == "bash_code_execution_tool_result":
+                c = getattr(b, "content", None)
+                rc = getattr(c, "return_code", 0) or 0
+                out = (getattr(c, "stdout", "") or "").rstrip()
+                err = (getattr(c, "stderr", "") or "").rstrip()
+                if out:
+                    for line in out.split("\n"):
+                        self._append(f"{line}\n", "md_codeblock")
+                    self.log.append({"kind": "code", "lang": "", "text": out})
+                if rc or err:
+                    self._append(f"  [exit {rc}] {err}\n", "note")
+                    self.log.append({"kind": "note",
+                                     "text": f"exit {rc}: {err}"})
+
+    def _copy_selection(self, _event=None):
+        """Copy the transcript selection to the clipboard. Explicit binding
+        so copy works in the read-only (disabled) transcript on every
+        platform, including over code blocks."""
+        try:
+            sel = self.view.get("sel.first", "sel.last")
+        except tk.TclError:
+            return "break"          # nothing selected
+        if sel:
+            self.clipboard_clear()
+            self.clipboard_append(sel)
+        return "break"
+
+    def _append_code_block(self, text, max_lines=60):
+        """Render file contents (a written script, an edit) in the code
+        block style. The visual indent comes from the md_codeblock tag's
+        left margin, NOT from injected spaces — so a copy-paste yields the
+        exact source, without leading whitespace that would break Python.
+        Capped so a runaway summary doc truncates instead of flooding — the
+        cap itself signals the model wrote something bulky."""
+        lines = text.rstrip("\n").split("\n")
+        for line in lines[:max_lines]:
+            self._append(f"{line}\n", "md_codeblock")
+        extra = len(lines) - max_lines
+        if extra > 0:
+            self._append(f"… ({extra} more lines)\n", "note")
 
     def _append_link(self, url, tag):
         """Insert url into the transcript as a clickable link — underlined,
@@ -1081,28 +1331,64 @@ class Workbench(tk.Tk):
         return (getattr(st, "web_search_requests", 0) or 0,
                 getattr(st, "web_fetch_requests", 0) or 0)
 
+    @staticmethod
+    def _code_runs(msg):
+        """Count sandbox bash executions from the content blocks. The API
+        prices code execution by container-time, not per run, and does NOT
+        report it in `usage` — so this is a run COUNT, never a dollar
+        figure. The meter says so."""
+        return sum(1 for b in msg.content
+                   if getattr(b, "type", "") == "bash_code_execution_tool_result")
+
     def _add_cost(self, model, msg):
         """The meter: one parenthesized sub-cost per mechanism — tokens,
         then searches — and the session total sums them. Zero counts are
         not shown; fetched pages already appear inside the token count."""
         rate_in, rate_out = PRICING.get(model, (0.0, 0.0))
         u = msg.usage
-        token_cost = (u.input_tokens * rate_in
-                      + u.output_tokens * rate_out) / 1_000_000
+        in_cost = u.input_tokens * rate_in / 1_000_000
+        out_cost = u.output_tokens * rate_out / 1_000_000
+        token_cost = in_cost + out_cost
         searches, fetches = self._web_usage(msg)
         search_cost = searches * SEARCH_COST
         self.spend += token_cost + search_cost
-        parts = [f"Tokens: In {u.input_tokens} / Out {u.output_tokens} "
-                 f"(+${token_cost:.6f})"]
+        elapsed = time.monotonic() - self._turn_start
+        parts = [f"Elapsed: {elapsed:.1f}s",
+                 f"Tokens: In {u.input_tokens} (+${in_cost:.6f}) "
+                 f"/ Out {u.output_tokens} (+${out_cost:.6f})"]
         if searches:
             parts.append(f"Searches: {searches} (+${search_cost:.6f})")
         if fetches:
             parts.append(f"Fetches: {fetches} (tokens only)")
-        self.status.set("Last API call —  " + "    |    ".join(parts)
+        runs = self._code_runs(msg)
+        if runs:
+            # Container-time isn't in `usage`; count only, not a dollar
+            # figure — the one lab mechanism the meter cannot price.
+            parts.append(f"Code runs: {runs} (free tier / $0.05/hr)")
+        self.status.set("    |    ".join(parts)
                         + f"    |    Session total: ${self.spend:.6f}")
+
+    def _spin(self):
+        """Live activity indicator in the status bar: a rotating glyph and
+        an elapsed-seconds clock, so a long server-tool turn (a search, or
+        the sandbox grinding on pi) visibly shows it's alive — and the
+        clock stands in for the money quietly spinning away. Runs on the UI
+        thread via `after`; stops the moment the turn finishes."""
+        if not self._spinning:
+            return
+        frames = "◐◓◑◒"
+        i = int((time.monotonic() - self._turn_start) * 5) % len(frames)
+        secs = time.monotonic() - self._turn_start
+        self.status.set(f"{frames[i]}  working… {secs:0.1f}s   "
+                        f"(tokens tick, the meter tallies when it returns)")
+        self.after(120, self._spin)
 
     def _finish(self):
         self.streaming = False
+        self._spinning = False
+        self._cancel = False
+        self._active_stream = None
+        self.send_btn.set_mode("Send", "#8fd18f", "#6fbf6f", self._send)
         # Put the sent prompt back in the entry, so re-asking the same
         # question with different knobs is one click away — but never
         # clobber anything typed while the reply was streaming.
@@ -1258,7 +1544,9 @@ class Workbench(tk.Tk):
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(self._session_markdown())
-            self.status.set(f"session saved — {path}")
+            # Confirm in the transcript, not the status bar — the meter's
+            # last cost reading stays put where you can still read it.
+            self._append(f"\n[session saved — {path}]\n", "note")
         except OSError as exc:
             self._append(f"\n[save failed: {exc}]\n", "note")
 
@@ -1291,6 +1579,11 @@ class Workbench(tk.Tk):
                           demote_headings(entry["text"]), ""]
             elif kind == "note":
                 lines += [f"> [{entry['text']}]", ""]
+            elif kind == "code":
+                # Fenced block so a saved script / stdout is copy-paste
+                # clean, not wrapped in blockquote brackets.
+                lines += [f"```{entry.get('lang', '')}",
+                          entry["text"].rstrip("\n"), "```", ""]
             elif kind == "divider":
                 lines += ["*(new conversation)*", ""]
         return "\n".join(lines)

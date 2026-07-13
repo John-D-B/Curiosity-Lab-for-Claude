@@ -32,9 +32,11 @@ with or endorsed by Anthropic.
 
 from __future__ import annotations
 
-__version__ = "2.8.0"
+__version__ = "2.9.0"
 
+import base64
 import datetime
+import io
 import json
 import os
 import queue
@@ -50,6 +52,14 @@ try:
     import anthropic
 except ImportError:
     anthropic = None
+
+# Pillow is OPTIONAL (v2.9.0). Native Tk renders PNG/GIF with integer-only
+# scaling; Pillow adds smooth downscaling and JPEG/WebP. The app degrades
+# gracefully to native Tk when Pillow isn't importable — no new hard dependency.
+try:
+    from PIL import Image, ImageTk
+except ImportError:
+    Image = ImageTk = None
 
 
 # - Prefer to read this from the scipt's --help option:
@@ -91,6 +101,22 @@ EXEC_TOOL = {"type": "code_execution_20260521", "name": "code_execution"}
 # can't spin forever.
 MAX_CONTINUATIONS = 5
 
+# Sandbox image output (v2.9.0): files the sandbox writes (e.g. a matplotlib
+# PNG) are captured server-side and referenced by `file_id` in the code-
+# execution result blocks. The Files API downloads the bytes — a beta path,
+# so its calls carry this beta flag. Download is free; the image was already
+# billed inside the code-execution tokens.
+FILES_BETA = "files-api-2025-04-14"
+IMAGE_MAX_WIDTH = 600            # inline render cap (px); larger images downscale
+
+# Does the outgoing prompt ask the model to actually RUN code? Keyword-based
+# and deliberately conservative — used only to warn, at Send, when the Sandbox
+# tool is off: the model can't execute, so it will IMAGINE the output (the
+# "imagined vs actual execution" lesson). Tune the trigger words here.
+EXEC_INTENT_RE = re.compile(
+    r"\bsandbox\b|\bexecute\b"
+    r"|\brun\s+(it|this|and|the\s+(script|code|program))\b", re.I)
+
 FONT_FAMILY = "Segoe UI"             # Tk substitutes the system font on macOS
 MONO_FAMILY = "Courier New"          # for `code` spans
 FONT_SIZES = [9, 10, 11, 12, 14, 16, 18, 20]
@@ -103,6 +129,12 @@ SECTION_LABEL_SLANT = "italic"       # "roman" | "italic"
 SECTION_LABEL_COLOR = "#8a8a8a"      # text colour (grey)
 SECTION_LABEL_PAD = 6                # grey space above & below each label (px)
 DEFAULT_FONT_SIZE = 12
+
+# Prompt box height, in lines. FIXED — a long prompt (e.g. a demo with a
+# Parameters block at the end) scrolls inside the box, with a scrollbar that
+# appears only on overflow, rather than growing the box and pushing the whole
+# window taller. The user enlarges the box by dragging the sash above it.
+PROMPT_MIN_LINES = 3
 
 # Markdown subset rendered into the transcript: ***bold italic***, **bold**,
 # *italic*, `code` inline; headings, bullets, and rules per line.
@@ -521,7 +553,6 @@ class Workbench(tk.Tk):
         self.log: list[dict] = []       # session journal for Save (survives New)
         self.me_text = ""               # Me-file contents (rides in the system prompt)
         self.me_name = ""
-        self._last_prompt = ""          # restored to the entry after each reply
         self._last_sent_persona = None  # detects mid-chat persona switches
         self.spend = 0.0                # running USD estimate this session
         self.q: queue.Queue = queue.Queue()
@@ -534,6 +565,8 @@ class Workbench(tk.Tk):
         self._sent_model = DEFAULT_MODEL   # model of the in-flight turn
         self._web_used_last_turn = False   # drives the evidence-drop note
         self._link_seq = 0                 # unique Tk tag per clickable URL
+        self._images: list = []            # keep PhotoImage refs — Tk GCs them
+        #                                    otherwise and the picture vanishes
 
         self._build_ui()
         # The app picks a sensible default size (wide enough for the top bar,
@@ -541,6 +574,7 @@ class Workbench(tk.Tk):
         # from settings.json by _apply_settings below — see _save_geometry.
         self.update_idletasks()
         self.geometry(f"{max(self.winfo_reqwidth(), 900)}x640")
+        self._welcome()   # greet the empty Response area with how to begin
         for err in self._config_errors:
             self._append(f"[{err}]\n", "note")
         default_key = os.path.join(CONFIG_DIR, APIKEY_FILE)
@@ -844,7 +878,8 @@ class Workbench(tk.Tk):
 
         # Transcript and entry share a vertical PanedWindow: the sash
         # between them can be dragged to grow the input area for long,
-        # multi-line prompts.
+        # multi-line prompts. Native (thin) ttk sash, plus a small drag TAB
+        # added below (self.grip) so the thin line is easy to catch.
         self.paned = ttk.PanedWindow(self, orient="vertical")
 
         # All fonts are set centrally by _apply_font_size(); only the
@@ -904,9 +939,22 @@ class Workbench(tk.Tk):
         self.send_btn.pack()
         save_btn.pack(pady=2)
         quit_btn.pack()
-        self.entry = tk.Text(bottom, height=3, wrap="word", width=10,
-                             padx=8, pady=6)
-        self.entry.pack(side="left", fill="both", expand=True)
+        # Entry + an auto-hiding vertical scrollbar, gridded so the scrollbar
+        # can be shown/removed in place (grid_remove keeps its cell) without
+        # disturbing the entry. The box is a fixed height; a long prompt
+        # scrolls here instead of growing the window (see _prompt_scroll_set).
+        entry_area = ttk.Frame(bottom)
+        entry_area.pack(side="left", fill="both", expand=True)
+        entry_area.rowconfigure(0, weight=1)
+        entry_area.columnconfigure(0, weight=1)
+        self.entry = tk.Text(entry_area, height=PROMPT_MIN_LINES, wrap="word",
+                             width=10, padx=8, pady=6)
+        self.prompt_scroll = ttk.Scrollbar(entry_area, orient="vertical",
+                                           command=self.entry.yview)
+        self.entry.configure(yscrollcommand=self._prompt_scroll_set)
+        self.entry.grid(row=0, column=0, sticky="nsew")
+        self.prompt_scroll.grid(row=0, column=1, sticky="ns")
+        self.prompt_scroll.grid_remove()   # hidden until the prompt overflows
         self.entry.bind("<Return>", self._on_return)       # Enter = Send
         self.entry.bind("<KP_Enter>", self._on_return)
         # Shift+Enter inserts a newline. Bind it explicitly (returning None
@@ -940,6 +988,18 @@ class Workbench(tk.Tk):
         self.paned.pack(fill="both", expand=True, padx=12, pady=(2, 0))
         self.paned.add(self.view, weight=1)
         self.paned.add(bottom, weight=0)
+        # A small raised "drag tab" centred on the sash. The native sash stays
+        # its normal thin self; this little square just gives the mouse a
+        # bigger target. It floats on top of the sash (placed at its current
+        # y) and drags it; it follows the sash when the window or the sash
+        # itself moves (via the <Configure> bindings below).
+        self.grip = tk.Frame(self.paned, width=24, height=11, bg="#9a9a9a",
+                             relief="raised", borderwidth=2,
+                             cursor="sb_v_double_arrow")
+        self.grip.bind("<B1-Motion>", self._on_grip_drag)
+        self.paned.bind("<Configure>", lambda e: self._place_grip())
+        self.view.bind("<Configure>", lambda e: self._place_grip())
+        self.after(200, self._place_grip)
 
         self._apply_font_size()
 
@@ -968,6 +1028,56 @@ class Workbench(tk.Tk):
         for t in ("meta", "curious", "note"):
             self.view.tag_config(t, lmargin2=margin)
         self.entry.configure(font=(FONT_FAMILY, size))
+
+    def _prompt_scroll_set(self, first, last):
+        """yscrollcommand for the fixed-height prompt box: drive the scrollbar
+        and auto-hide it. When the whole prompt fits, the scrollbar is removed
+        and the entry uses the full width; when it overflows, the scrollbar
+        reappears in its grid cell so a long prompt scrolls in place instead of
+        growing the window. Enlarge the box by dragging the sash above it."""
+        if not hasattr(self, "prompt_scroll"):
+            return
+        self.prompt_scroll.set(first, last)
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            self.prompt_scroll.grid_remove()
+        else:
+            self.prompt_scroll.grid()
+
+    def _place_grip(self):
+        """Keep the drag tab centred on the sash. Called whenever the sash can
+        move — window resize, a sash drag, or a tab drag — so the tab follows
+        it. Guarded: before the panes are laid out sashpos isn't meaningful."""
+        if not hasattr(self, "grip"):
+            return
+        try:
+            y = self.paned.sashpos(0)
+        except tk.TclError:
+            return
+        if y > 0:
+            self.grip.place(in_=self.paned, relx=0.5, y=y, anchor="center")
+
+    def _on_grip_drag(self, event):
+        """Drag the sash from the tab: move it to the pointer's y within the
+        paned window (clamped so neither pane can be dragged shut), then
+        reposition the tab onto the sash's new spot."""
+        try:
+            h = self.paned.winfo_height()
+            y = self.grip.winfo_pointery() - self.paned.winfo_rooty()
+            self.paned.sashpos(0, max(60, min(h - 60, y)))
+        except tk.TclError:
+            return
+        self._place_grip()
+
+    def _welcome(self):
+        """Greet the otherwise-empty Response area at startup with a few ways
+        to begin, in the grey-italic 'meta' style (like the other annotations).
+        Display only — not logged, and cleared by New like anything else."""
+        self._append(
+            "1. Press Send to get a fast, cheap response.\n"
+            "2. Change menu entries (Model, Persona, Curiosity) then "
+            "press Send.\n"
+            "3. Select a Demo, press Send.\n",
+            "meta")
 
     def _apply_settings(self):
         """Apply settings.json — pre-loaded preferences at startup."""
@@ -1218,6 +1328,7 @@ class Workbench(tk.Tk):
         self.view.configure(state="normal")
         self.view.delete("1.0", "end")
         self.view.configure(state="disabled")
+        self._welcome()   # don't leave a blank Response area after New either
         self._reload_choices()
         self.status.set(f"new conversation, personas, curiosities & demos "
                         f"reloaded — session total: {self._money(self.spend)}")
@@ -1332,8 +1443,10 @@ class Workbench(tk.Tk):
             self.status.set("no API key — see transcript")
             return   # prompt is kept in the entry box
 
-        self.entry.delete("1.0", "end")
-        self._last_prompt = text
+        # The prompt stays in the box while the reply streams (and after), so
+        # there's something to read besides a blank field and re-asking with
+        # tweaked knobs is one click. It also appears in the transcript's You:
+        # block. Clear it yourself, or press New, to start a fresh question.
         persona_hint = self._persona_changed_midchat()
         suffix = self._current_suffix()
         # The prior turn's search results arrived as encrypted replay blobs;
@@ -1345,6 +1458,32 @@ class Workbench(tk.Tk):
             self._append(f"\n[{evidence}]\n", "note")
             self.log.append({"kind": "note", "text": evidence})
         self._web_used_last_turn = False
+        # Heads-up: the prompt asks to run code but the Sandbox tool is off, so
+        # nothing will actually execute — the model will imagine the output.
+        # This is the "imagined vs actual execution" lesson, surfaced before the
+        # reply rather than left for the user to catch. Keyword-based; tune
+        # EXEC_INTENT_RE.
+        warned = not self.sandbox.get() and bool(EXEC_INTENT_RE.search(text))
+        if warned:
+            # Print the note, then hold 3s BEFORE anything else prints, so it
+            # sits alone at the bottom and is read before the You: block and
+            # streaming reply scroll it up. streaming=True blocks a second Send
+            # during the pause; the rest of the turn runs in _proceed_turn.
+            warn = ("Sandbox is off — the model can't run code, so any "
+                    "“output” is imagined by the LLM.")
+            self._append(f"\n[{warn}]\n", "note")
+            self.log.append({"kind": "note", "text": warn})
+            self.streaming = True
+            self.status.set("Sandbox off — hold on, read the note… (3s)")
+            self.after(3000,
+                       lambda: self._proceed_turn(text, suffix, persona_hint))
+        else:
+            self._proceed_turn(text, suffix, persona_hint)
+
+    def _proceed_turn(self, text, suffix, persona_hint):
+        """The rest of a turn, after any sandbox-warning pause: assemble the
+        tools, record and show the user turn, and start streaming. The knobs
+        are read live, so ticking a tool box during the pause takes effect."""
         tools = ([FETCH_TOOL] if self.fetch.get() else []) \
               + ([SEARCH_TOOL] if self.search.get() else []) \
               + ([EXEC_TOOL] if self.sandbox.get() else [])
@@ -1356,19 +1495,24 @@ class Workbench(tk.Tk):
                          "curiosity": self.curiosity.get() if suffix else "",
                          "web": web_note})
         self._show_user_turn(text, suffix, persona_hint, web_note)
+        self._begin_turn(self.model.get(), self._current_system(),
+                         list(self.history), tools)
 
+    def _begin_turn(self, model, system, messages, tools):
+        """Start the streaming turn: flip Send→Stop, spin the meter, and launch
+        the worker thread. Split out of _send so the sandbox warning can pause
+        before it (see _send)."""
         self.streaming = True
         self._cancel = False
         self._gen += 1                       # this turn's id; older output is dropped
-        self._sent_model = self.model.get()
+        self._sent_model = model
         self.send_btn.set_mode("Stop", "#e0a84e", "#c8923a", self._stop)
         self._spinning = True
         self._turn_start = time.monotonic()
         self._spin()
         threading.Thread(
             target=self._worker,
-            args=(self._gen, self._sent_model, self._current_system(),
-                  list(self.history), tools),
+            args=(self._gen, self._sent_model, system, messages, tools),
             daemon=True,
         ).start()
 
@@ -1440,15 +1584,56 @@ class Workbench(tk.Tk):
                 convo = convo + [{"role": "assistant",
                                   "content": final.content}]
                 self.q.put((gen, "pause", None))
+            # Any files the sandbox wrote are downloaded HERE, on the worker
+            # thread — never in _note_code_activity, which runs on the UI
+            # thread and would freeze the window mid-download. The rendering
+            # step later touches only bytes already in hand.
+            files = self._download_output_files(final)
             # Carry the send-time model with the result: the combobox may
             # have been switched mid-stream, and the bill belongs to the
             # model that actually served the request.
-            self.q.put((gen, "done", (model, final)))
+            self.q.put((gen, "done", (model, final, files)))
         except Exception as exc:   # noqa: BLE001 — surface everything to the user
             self.q.put((gen, "error", f"{type(exc).__name__}: {exc}"))
         finally:
             if self._active_stream is stream:   # don't clobber a newer turn
                 self._active_stream = None
+
+    def _download_output_files(self, msg):
+        """Worker-thread only. Scan the final message's code-execution result
+        blocks for output files (each carries a `file_id`) and download the
+        bytes via the beta Files API, so the UI thread later renders from
+        bytes already fetched — no network call while the window is live.
+
+        Returns {file_id: {name, mime, size, data}} on success, or
+        {file_id: {error}} for a file that couldn't be retrieved; either way
+        the turn survives. An empty dict when the sandbox wrote nothing (or
+        wasn't used) costs a cheap walk of msg.content and no API calls."""
+        files: dict = {}
+        client = self.client
+        if client is None:
+            return files
+        for b in getattr(msg, "content", None) or []:
+            if getattr(b, "type", "") != "bash_code_execution_tool_result":
+                continue
+            result = getattr(b, "content", None)      # may be an error block
+            for out in getattr(result, "content", None) or []:
+                fid = getattr(out, "file_id", None)
+                if not fid or fid in files:
+                    continue
+                try:
+                    meta = client.beta.files.retrieve_metadata(
+                        fid, betas=[FILES_BETA])
+                    raw = client.beta.files.download(
+                        fid, betas=[FILES_BETA]).read()
+                    files[fid] = {"name": getattr(meta, "filename", "output"),
+                                  "mime": getattr(meta, "mime_type", "") or "",
+                                  "size": getattr(meta, "size_bytes", None)
+                                  or len(raw),
+                                  "data": raw}
+                except Exception as exc:   # noqa: BLE001 — surface, don't crash
+                    files[fid] = {"error": f"{type(exc).__name__}: {exc}"}
+        return files
 
     def _pump(self):
         try:
@@ -1556,7 +1741,7 @@ class Workbench(tk.Tk):
                         + f"    |    Session total: {self._money(self.spend)}"
                         + " (est)")
 
-    def _on_done(self, model, msg):
+    def _on_done(self, model, msg, files=None):
         self._spinning = False   # stop before the final meter reading lands
         if msg.stop_reason == "refusal":
             # Drop the refused user turn too — left in place it would be
@@ -1583,14 +1768,14 @@ class Workbench(tk.Tk):
             self.log.append({"kind": "assistant", "model": model,
                              "text": reply})
             self._rerender_reply(reply)
-            self._note_web_activity(msg)
+            self._note_web_activity(msg, files)
             searches, fetches = self._web_usage(msg)
             self._web_used_last_turn = bool(searches or fetches)
         self._add_cost(model, msg)
         self._append("\n", "assistant")
         self._finish()
 
-    def _note_web_activity(self, msg):
+    def _note_web_activity(self, msg, files=None):
         """Post-hoc transcript notes for server-side tool use, read from
         the final message: the model's server_tool_use blocks say what was
         ATTEMPTED, the paired result blocks say whether it worked (a fetch
@@ -1635,15 +1820,20 @@ class Workbench(tk.Tk):
             self._append(f"{suffix}]\n", tag)
             self.log.append({"kind": "note",
                              "text": text + (url or "") + suffix})
-        self._note_code_activity(msg)
+        self._note_code_activity(msg, files)
 
-    def _note_code_activity(self, msg):
+    def _note_code_activity(self, msg, files=None):
         """Post-hoc notes for the Linux sandbox, read from the final message.
         This is the 'it really executed' evidence — the live stream only
         pauses. Two sub-tools surface here: bash (commands + stdout/stderr,
         non-zero exit in red) and the file editor (create/edit — the actual
         file the model WROTE, e.g. the script itself, shown regardless of
-        whether the model bothered to narrate it)."""
+        whether the model bothered to narrate it).
+
+        v2.9.0: a bash result also carries any OUTPUT files the run produced
+        (a matplotlib PNG, a CSV) as output blocks with a `file_id`. `files`
+        is the {file_id: info} map the worker already downloaded; images
+        render inline, other files get a Save-me note."""
         for b in msg.content:
             t = getattr(b, "type", "")
             if t == "server_tool_use" and b.name == "bash_code_execution":
@@ -1680,6 +1870,81 @@ class Workbench(tk.Tk):
                     self._append(f"  [exit {rc}] {err}\n", "note")
                     self.log.append({"kind": "note",
                                      "text": f"exit {rc}: {err}"})
+                # Output files the run wrote (the v2.9.0 payoff): images
+                # render inline, everything else gets a Save-me note.
+                for out in getattr(c, "content", None) or []:
+                    fid = getattr(out, "file_id", None)
+                    if fid:
+                        self._emit_output_file(fid, (files or {}).get(fid))
+
+    def _emit_output_file(self, fid, info):
+        """Render or note one sandbox output file from bytes the worker already
+        downloaded. `info` is {name, mime, size, data}, or {error}, or None
+        when the file wasn't retrieved. Images show inline; other files (and
+        undecodable images) get a bracketed Save-me note. An `image`/`file`
+        log entry carries the bytes so Save can write them as a sidecar."""
+        if not info:
+            self._append(f"\n  [sandbox wrote a file (id {fid}) — "
+                         "not retrieved]\n", "note")
+            return
+        if info.get("error"):
+            self._append(f"\n  [output file download failed: "
+                         f"{info['error']}]\n", "note")
+            return
+        name = info.get("name") or "output"
+        mime = info.get("mime") or ""
+        raw = info.get("data") or b""
+        size = info.get("size") or len(raw)
+        if mime.startswith("image/"):
+            photo, dims = self._make_photo(raw, mime)
+            if photo is not None:
+                self._append(f"\n  [rendered {name} "
+                             f"({dims[0]}×{dims[1]})]\n", "curious")
+                self.view.configure(state="normal")
+                self.view.image_create("end", image=photo)
+                self.view.insert("end", "\n")
+                self.view.see("end")
+                self.view.configure(state="disabled")
+                self._images.append(photo)   # keep a ref or Tk GCs the picture
+                self.log.append({"kind": "image", "name": name,
+                                 "mime": mime, "data": raw})
+                return
+            # Undecodable here (e.g. JPEG/WebP with no Pillow) — fall through.
+        self._append(f"\n  [wrote {name} ({self._thousands(size)} bytes) "
+                     "— Save to keep]\n", "curious")
+        self.log.append({"kind": "file", "name": name, "mime": mime,
+                         "data": raw})
+
+    def _make_photo(self, raw, mime):
+        """Return (PhotoImage, (orig_w, orig_h)) scaled to <= IMAGE_MAX_WIDTH,
+        or (None, None) if the bytes can't be decoded here. Pillow (optional)
+        gives smooth downscaling and JPEG/WebP; without it, native Tk handles
+        PNG/GIF with integer subsampling only. Reported dims are the ORIGINAL
+        size, so the note reflects what the sandbox produced, not the thumbnail."""
+        cap = IMAGE_MAX_WIDTH
+        if Image is not None and ImageTk is not None:
+            try:
+                im = Image.open(io.BytesIO(raw))
+                im.load()
+                ow, oh = im.size
+                if ow > cap:
+                    try:
+                        resample = Image.Resampling.LANCZOS
+                    except AttributeError:       # Pillow < 9.1
+                        resample = Image.LANCZOS
+                    im = im.resize((cap, max(1, round(oh * cap / ow))),
+                                   resample)
+                return ImageTk.PhotoImage(im), (ow, oh)
+            except Exception:   # noqa: BLE001 — fall back to native Tk
+                pass
+        try:
+            img = tk.PhotoImage(data=raw)   # Tk 8.6 decodes PNG/GIF from bytes
+        except tk.TclError:
+            return None, None
+        ow, oh = img.width(), img.height()
+        if ow > cap:
+            img = img.subsample((ow // cap) + 1)   # integer-only, but crisp
+        return img, (ow, oh)
 
     def _copy_selection(self, _event=None):
         """Copy the transcript selection to the clipboard. Explicit binding
@@ -1791,12 +2056,8 @@ class Workbench(tk.Tk):
         self._cancel = False
         self._active_stream = None
         self.send_btn.set_mode("Send", "#8fd18f", "#6fbf6f", self._send)
-        # Put the sent prompt back in the entry, so re-asking the same
-        # question with different knobs is one click away — but never
-        # clobber anything typed while the reply was streaming.
-        if (self._last_prompt
-                and not self.entry.get("1.0", "end").strip()):
-            self.entry.insert("1.0", self._last_prompt)
+        # The prompt was never cleared on Send, so it's still in the box —
+        # nothing to restore here.
 
     # ---- quit / window position -------------------------------------------
     def _quit(self):
@@ -1942,13 +2203,53 @@ class Workbench(tk.Tk):
         if not path:
             return
         try:
+            # Images/files ride out as sidecars next to the .md (a data-URI
+            # would bloat the file); each gets a relative filename the
+            # Markdown then links to. Written first so the links resolve.
+            assets = self._write_assets(path)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(self._session_markdown())
             # Confirm in the transcript, not the status bar — the meter's
             # last cost reading stays put where you can still read it.
-            self._append(f"\n[session saved — {path}]\n", "note")
+            extra = (f"  (+{assets} sidecar file{'s' if assets != 1 else ''}; "
+                     "images also embedded inline)" if assets else "")
+            self._append(f"\n[session saved — {path}{extra}]\n", "note")
         except OSError as exc:
             self._append(f"\n[save failed: {exc}]\n", "note")
+
+    @staticmethod
+    def _mime_ext(mime):
+        """A file extension for a sidecar whose logged name lacks one."""
+        return {"image/png": ".png", "image/gif": ".gif",
+                "image/jpeg": ".jpg", "image/webp": ".webp"}.get(mime, "")
+
+    def _write_assets(self, md_path):
+        """Write every logged image/file as a sidecar beside the .md and stamp
+        each entry with the relative filename _session_markdown links to.
+        Returns the count written. Names are '<md-stem>.assetN.<ext>', unique
+        and free of the spaces a model's own filename might carry."""
+        stem = os.path.splitext(os.path.basename(md_path))[0]
+        outdir = os.path.dirname(md_path) or "."
+        seq = written = 0
+        for entry in self.log:
+            if entry.get("kind") not in ("image", "file"):
+                continue
+            data = entry.get("data")
+            if not data:
+                entry.pop("savename", None)
+                continue
+            seq += 1
+            ext = (os.path.splitext(entry.get("name") or "")[1]
+                   or self._mime_ext(entry.get("mime", "")))
+            fname = f"{stem}.asset{seq}{ext}"
+            try:
+                with open(os.path.join(outdir, fname), "wb") as f:
+                    f.write(data)
+                entry["savename"] = fname
+                written += 1
+            except OSError:
+                entry.pop("savename", None)
+        return written
 
     def _session_markdown(self):
         """The session journal as Markdown, laid out for skimming: a rule
@@ -1984,6 +2285,31 @@ class Workbench(tk.Tk):
                 # clean, not wrapped in blockquote brackets.
                 lines += [f"```{entry.get('lang', '')}",
                           entry["text"].rstrip("\n"), "```", ""]
+            elif kind == "image":
+                alt = entry.get("name") or "image"
+                data = entry.get("data")
+                if data:
+                    # Embed inline as a base64 data-URI so the .md shows the
+                    # image with nothing else needed (opens self-contained in
+                    # Typora / VS Code / a browser). The sidecar written by
+                    # _write_assets is the standalone copy, linked below.
+                    mime = entry.get("mime") or "image/png"
+                    b64 = base64.b64encode(data).decode("ascii")
+                    lines += [f"![{alt}](data:{mime};base64,{b64})", ""]
+                    if entry.get("savename"):
+                        lines += [f"*(also saved beside this file as "
+                                  f"[{entry['savename']}]({entry['savename']}))*",
+                                  ""]
+                elif entry.get("savename"):
+                    lines += [f"![{alt}]({entry['savename']})", ""]
+                else:
+                    lines += [f"> [image: {alt} — not saved]", ""]
+            elif kind == "file":
+                name = entry.get("name") or "file"
+                if entry.get("savename"):
+                    lines += [f"> [file: [{name}]({entry['savename']})]", ""]
+                else:
+                    lines += [f"> [file: {name} — not saved]", ""]
             elif kind == "divider":
                 lines += ["*(new conversation)*", ""]
         return "\n".join(lines)

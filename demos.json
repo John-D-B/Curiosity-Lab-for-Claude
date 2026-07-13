@@ -1,16 +1,25 @@
 [
   {
-    "tag": "Curiosity Lab: Introspection",
-    "Model": "claude-haiku-4-5",
+    "tag": "Introspection",
+    "Model": "claude-haiku",
     "Persona": "Claude",
     "Curiosity": "Sources",
     "Fetch": true,
     "Search": false,
-    "Prompt": "Show me my web page: https://github.com/John-D-B/Curiosity-Lab-for-Claude"
+    "Prompt": "Show my web page: https://github.com/John-D-B/Curiosity-Lab-for-Claude"
+  },
+  {
+    "tag": "Show Claude costs",
+    "Model": "claude-haiku",
+    "Persona": "Concise",
+    "Curiosity": "(none)",
+    "Fetch": true,
+    "Search": true,
+    "Prompt": "Look up Anthropic's current API prices for the Claude models, and summarize in a monospaced table."
   },
   {
     "tag": "Curiosity Lab: Unique?",
-    "Model": "haiku",
+    "Model": "claude-haiku",
     "Persona": "Claude",
     "Curiosity": "Sources",
     "Fetch": true,
@@ -18,63 +27,76 @@
     "Prompt": "Search all use-cases of 'Curiosity Lab' or 'Curiosity Labs' as a brand or title. Include GitHub and open-source projects - also using this URL: 'https://api.github.com/search/repositories?q=curiosity+lab+claude+in:name'  Introspection: Is this application anywhere in these lists?"
   },
   {
-    "tag": "Which AI should I buy? (then switch Persona and re-ask)",
-    "Model": "claude-haiku-4-5",
+    "tag": "Which AI should I buy?",
+    "Model": "claude-haiku",
     "Persona": "ChatGPT",
     "Curiosity": "(none)",
     "Prompt": "Which AI assistant should I subscribe to?"
   },
   {
     "tag": "Pirate wisdom",
-    "Model": "claude-haiku-4-5",
+    "Model": "claude-haiku",
     "Persona": "Pirate",
     "Curiosity": "Questions",
     "Prompt": "Should I get out of bed tomorrow morning?"
   },
   {
     "tag": "Skeptic vs. microservices",
-    "Model": "claude-sonnet-5",
+    "Model": "claude-sonnet",
     "Persona": "Skeptic",
     "Curiosity": "Counterpoint",
     "Prompt": "We switched to microservices and productivity doubled. Should everyone do it?"
   },
   {
+    "tag": "Skeptic vs. Kubernetes",
+    "Model": "claude-sonnet",
+    "Persona": "Skeptic",
+    "Curiosity": "Counterpoint",
+    "Prompt": "I heard that much software has switched to Kubernetes. Should everyone do it?"
+  },
+  {
     "tag": "Agony Aunt: commit wars",
-    "Model": "claude-haiku-4-5",
+    "Model": "claude-haiku",
     "Persona": "Agony Aunt",
     "Curiosity": "(none)",
     "Prompt": "My colleague keeps rewriting my commits. Should I confront him?"
   },
   {
+    "tag": "Claude Delusion joke",
+    "Model": "claude-sonnet",
+    "Persona": "Limerick",
+    "Curiosity": "Sources",
+    "Search": true,
+    "Prompt": "Tell me a humorous joke about Richard Dawkins and his Claude Delusion."
+  },
+  {
     "tag": "Teach me OAuth",
-    "Model": "claude-sonnet-5",
+    "Model": "claude-sonnet",
     "Persona": "Teacher",
     "Curiosity": "Sources",
     "Prompt": "Explain how OAuth login works, like I'm smart but new to it."
   },
   {
     "tag": "Grok's hot take",
-    "Model": "claude-haiku-4-5",
+    "Model": "claude-haiku",
     "Persona": "XGrok",
     "Curiosity": "Misunderstanding",
     "Prompt": "Is a hotdog a sandwich?"
   },
   {
-    "tag": "Live web lookup (search + fetch, about $0.01)",
-    "Model": "claude-haiku-4-5",
+    "tag": "Sandbox introspection",
+    "Model": "claude-haiku",
     "Persona": "Concise",
     "Curiosity": "(none)",
-    "Fetch": true,
-    "Search": true,
-    "Prompt": "Look up Anthropic's current API prices for the Claude models. This app assumes haiku costs $1 in / $5 out per million tokens - is that still right?"
+    "Sandbox": true,
+    "Prompt": "Run these Bash commands in the sandbox and tell me exactly what machine you are computing on: cat /etc/os-release; uname -a; python3 --version; nproc"
   },
   {
-    "tag": "Python programming (then switch Models and re-ask)",
-    "Model": "claude-haiku-4-5",
-    "Persona": "Claude",
+    "tag": "Mandelbrot in sandbox",
+    "Model": "claude-haiku",
+    "Persona": "Concise",
     "Curiosity": "Sources",
-    "Fetch": false,
-    "Search": false,
-    "Prompt": "Write a small Python script to calculate or analyze the digits of PI, to determine at what position does a given digit sequence first appears, skipping non-digits. Then run it with this sequence: 1776-07-04"
+    "Sandbox": true,
+    "Prompt": "In the sandbox, compute the Mandelbrot set with numpy (vectorized, not per-pixel Python loops) and matplotlib, using the parameters at the end of this message. Color the exterior by a log-scaled smooth escape-time with the colormap named below, and paint the interior black. Keep the pixels square — size the grid to the coordinate ranges so the set isn't stretched. Save it as mandelbrot.png. Show me the script first, then show the colormaps in a multicolumn list, then run it and report the compute time and the PNG size.\n\nParameters:\nreal range: [-2.5, 1.0]\nimag range: [-1.25, 1.25]\nresolution (long side): 2000\nmax iterations: 500\ncolormap: turbo"
   }
 ]

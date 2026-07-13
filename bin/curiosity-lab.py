@@ -32,7 +32,7 @@ with or endorsed by Anthropic.
 
 from __future__ import annotations
 
-__version__ = "2.7.0"
+__version__ = "2.8.0"
 
 import datetime
 import json
@@ -51,6 +51,9 @@ try:
 except ImportError:
     anthropic = None
 
+
+# - Prefer to read this from the scipt's --help option:
+GITHUB_URL = "https://github.com/John-D-B/Curiosity-Lab-for-Claude"
 
 # Price per 1M tokens (USD): (input, output). Standard rates.
 
@@ -91,6 +94,14 @@ MAX_CONTINUATIONS = 5
 FONT_FAMILY = "Segoe UI"             # Tk substitutes the system font on macOS
 MONO_FAMILY = "Courier New"          # for `code` spans
 FONT_SIZES = [9, 10, 11, 12, 14, 16, 18, 20]
+
+# ---- Section headers: the "Response" / "Prompt" labels above the two boxes.
+# Findable knobs — tweak these to restyle both labels at once.
+SECTION_LABEL_SIZE = 15              # point size
+SECTION_LABEL_WEIGHT = "bold"        # "normal" | "bold"
+SECTION_LABEL_SLANT = "italic"       # "roman" | "italic"
+SECTION_LABEL_COLOR = "#8a8a8a"      # text colour (grey)
+SECTION_LABEL_PAD = 6                # grey space above & below each label (px)
 DEFAULT_FONT_SIZE = 12
 
 # Markdown subset rendered into the transcript: ***bold italic***, **bold**,
@@ -125,12 +136,25 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 # The script lives in bin/; the JSON configs sit at the project top level.
 CONFIG_DIR = (os.path.dirname(APP_DIR)
               if os.path.basename(APP_DIR) == "bin" else APP_DIR)
+
 PERSONAS_FILE = "personas.json"
+NO_PERSONAS = "(none)"
+## PERSONAS_TINT_TOP = "..."
+PERSONAS_TINT_BODY = "#FCEAFA"
+
 CURIOSITIES_FILE = "curiosities.json"
-SETTINGS_FILE = "settings.json"
-DEMOS_FILE = "demos.json"
-APIKEY_FILE = "apikey.txt"   # auto-loaded at startup when present
 NO_CURIOSITY = "(none)"
+## CURIOSITIES_TINT_TOP = "..."
+CURIOSITIES_TINT_BODY = "#E2F3FE"  ## "#FFFEDE"
+
+SETTINGS_FILE = "settings.json"
+
+APIKEY_FILE = "apikey.txt"   # auto-loaded at startup when present
+
+DEMOS_FILE = "demos.json"
+NO_DEMO = "(none)"
+DEMOS_TINT_TOP = "#9DEC9D"
+DEMOS_TINT_BODY = "#EBFBE9"
 
 DEFAULT_PERSONAS = [
     {"tag": "Concise",
@@ -364,6 +388,127 @@ class RoundButton(tk.Canvas):
         self.itemconfig(self.label, text=text)
 
 
+class _MenuHover:
+    """Makes a readonly combobox's dropdown feel like a native Mac menu: the
+    highlight follows the cursor with no button held, and a delayed tooltip
+    shows the hovered item's full text (for values the narrow box clips).
+    macOS doesn't deliver hover-motion to the popdown, so this POLLS the
+    pointer while the list is open instead of relying on <Motion> events."""
+
+    def __init__(self, combo, listbox_path, textfn=None, debug=False,
+                 delay=400, period=70):
+        self.combo = combo
+        self.tk = combo.tk
+        self.lb = listbox_path
+        self.textfn = textfn     # optional: map an item's text -> tooltip text
+        self.debug = debug       # -v: log tooltip events to stderr
+        self.delay = delay
+        self.period = period
+        self.tip = None
+        self.cur = None          # index the highlight/tooltip is currently on
+        self.dwell = 0           # ms the cursor has rested on `cur`
+        # A visible selection colour so the highlight shows even when the
+        # listbox isn't focused (macOS mutes an inactive selection otherwise).
+        try:
+            self.tk.call(self.lb, "configure",
+                         "-selectbackground", "#3875d7",
+                         "-selectforeground", "white", "-activestyle", "none")
+        except tk.TclError:
+            pass
+        self._poll()
+
+    def _poll(self):
+        try:
+            mapped = int(self.tk.call("winfo", "ismapped", self.lb))
+        except tk.TclError:
+            return                          # widget gone — stop the loop
+        if mapped:
+            self._track()
+        elif self.tip is not None or self.cur is not None:
+            self._hide()
+        self.combo.after(self.period, self._poll)
+
+    def _track(self):
+        try:
+            px = int(self.tk.call("winfo", "pointerx", self.lb))
+            py = int(self.tk.call("winfo", "pointery", self.lb))
+            x = int(self.tk.call("winfo", "rootx", self.lb))
+            y = int(self.tk.call("winfo", "rooty", self.lb))
+            w = int(self.tk.call("winfo", "width", self.lb))
+            h = int(self.tk.call("winfo", "height", self.lb))
+        except tk.TclError:
+            return
+        if not (x <= px < x + w and y <= py < y + h):
+            self._hide()
+            return
+        try:
+            idx = int(self.tk.call(self.lb, "nearest", py - y))
+            text = self.tk.call(self.lb, "get", idx)
+        except (tk.TclError, ValueError):
+            return
+        if idx < 0:
+            return
+        if self.textfn is not None:         # Demos shows its prompt, not the tag
+            try:
+                text = self.textfn(text)
+            except Exception:
+                pass
+        try:                                # the highlight follows the cursor
+            self.tk.call(self.lb, "selection", "clear", 0, "end")
+            self.tk.call(self.lb, "selection", "set", idx)
+            self.tk.call(self.lb, "activate", idx)
+        except tk.TclError:
+            pass
+        if idx != self.cur:
+            self.cur = idx                  # moved → reset dwell, drop old tip
+            self.dwell = 0
+            self._destroy_tip()
+        elif self.tip is None:
+            self.dwell += self.period       # resting → show tip after delay
+            if self.dwell >= self.delay:
+                self._show(text, py)
+
+    def _show(self, text, y):
+        try:
+            lb_x = int(self.tk.call("winfo", "rootx", self.lb))
+            lb_w = int(self.tk.call("winfo", "width", self.lb))
+        except tk.TclError:
+            return
+        self.tip = tk.Toplevel(self.combo)
+        self.tip.wm_overrideredirect(True)
+        try:
+            self.tip.wm_attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        tk.Label(self.tip, text=str(text), justify="left", wraplength=420,
+                 background="#ffffe0", foreground="#000000", relief="solid",
+                 borderwidth=1, padx=5, pady=2).pack()
+        # Prefer just right of the dropdown; if that runs off the screen edge,
+        # flip to the left of it so the panel is always fully visible.
+        self.tip.update_idletasks()
+        tw = self.tip.winfo_reqwidth()
+        sw = self.combo.winfo_screenwidth()
+        x = lb_x + lb_w + 4
+        if x + tw > sw - 8:
+            x = max(8, lb_x - tw - 4)
+        self.tip.wm_geometry(f"+{x}+{y - 6}")
+        self.tip.lift()
+        # Diagnostic — uncomment to trace hover firing under -v:
+        # if self.debug:
+        #     import sys
+        #     print(f"[hover] show @ {x},{y-6}  lb={self.lb}", file=sys.stderr)
+
+    def _destroy_tip(self):
+        if self.tip is not None:
+            self.tip.destroy()
+            self.tip = None
+
+    def _hide(self):
+        self._destroy_tip()
+        self.cur = None
+        self.dwell = 0
+
+
 class Workbench(tk.Tk):
     def __init__(self, verbose=False):
         super().__init__()
@@ -391,9 +536,9 @@ class Workbench(tk.Tk):
         self._link_seq = 0                 # unique Tk tag per clickable URL
 
         self._build_ui()
-        # The app picks its own size: wide enough that the top bar always
-        # fits, tall enough to read. Only the POSITION is remembered in
-        # settings.json — see _save_geometry.
+        # The app picks a sensible default size (wide enough for the top bar,
+        # tall enough to read); the last SIZE and POSITION are then restored
+        # from settings.json by _apply_settings below — see _save_geometry.
         self.update_idletasks()
         self.geometry(f"{max(self.winfo_reqwidth(), 900)}x640")
         for err in self._config_errors:
@@ -420,93 +565,228 @@ class Workbench(tk.Tk):
         unit = max(1, f.measure("0"))
         return max(minimum, max(map(f.measure, tags)) // unit + 1)
 
+    def _attach_menu_hover(self, combo, textfn=None):
+        """Wire a hover tooltip onto a readonly combobox's dropdown list.
+        `textfn` optionally maps an item's text to what the panel shows (Demos
+        maps a tag to its prompt). Cosmetic and fully guarded — any failure
+        here leaves the window working, just without the panel on that menu."""
+        try:
+            popdown = combo.tk.call("ttk::combobox::PopdownWindow", combo)
+            _MenuHover(combo, f"{popdown}.f.l", textfn=textfn,
+                       debug=self.verbose)
+            # Diagnostic — uncomment to trace attach under -v:
+            # if self.verbose:
+            #     import sys
+            #     print(f"[hover] attached  lb={popdown}.f.l", file=sys.stderr)
+        except Exception:
+            pass
+            # if self.verbose:
+            #     import sys
+            #     print("[hover] attach FAILED", file=sys.stderr)
+
+    def _demo_prompt(self, tag):
+        """Tooltip text for a Demos item: its prompt (what Send will fire),
+        not the tag echoed back. Falls back to the tag if there's no prompt."""
+        if tag == NO_DEMO:
+            return "(no demo — pick one to preload a prompt and settings)"
+        bundle = self.demo_bundles.get(tag)
+        if bundle:
+            for k, v in bundle.items():
+                if str(k).lower() in ("prompt", "preload"):
+                    return str(v)
+        return tag
+
+    def _persona_text(self, tag):
+        """Persona hover shows the system-prompt text, not the tag."""
+        if tag == NO_PERSONAS:
+            return "(no persona — the model answers without one)"
+        return self.personas.get(tag) or tag
+
+    def _curiosity_text(self, tag):
+        """Curiosity hover shows the rider text, not the tag."""
+        if tag == NO_CURIOSITY:
+            return "(no rider — nothing appended to your prompt)"
+        return self.curiosities.get(tag) or tag
+
+    def _add_face(self, combo, textvar, color):
+        """Overlay a coloured 'face' Label on a readonly combobox's field so it
+        reads as FILLED — macOS aqua won't tint the native field itself. The
+        face shows the current value, leaves the arrow exposed, and clicking it
+        posts the dropdown. Inset a few px for breathing room. (Size doesn't
+        rescale the selectors, so the face needs no font tracking.)"""
+        face = tk.Label(combo.master, textvariable=textvar, background=color,
+                        foreground="#000000", anchor="w", padx=6)
+        face.place(in_=combo, x=3, y=3,
+                   relwidth=1.0, relheight=1.0, width=-28, height=-6)
+        face.bind("<Button-1>",
+                  lambda e: combo.tk.call("ttk::combobox::Post", combo))
+
+    def _section_label(self, parent, text):
+        """A centred grey section header ('Response' / 'Prompt') above a box.
+        Styling comes entirely from the SECTION_LABEL_* constants near the top
+        of the file — change those to restyle both labels at once."""
+        font = tkfont.Font(family=FONT_FAMILY, size=SECTION_LABEL_SIZE,
+                           weight=SECTION_LABEL_WEIGHT,
+                           slant=SECTION_LABEL_SLANT)
+        return tk.Label(parent, text=text, font=font,
+                        foreground=SECTION_LABEL_COLOR,
+                        background=self.cget("bg"), anchor="center",
+                        pady=SECTION_LABEL_PAD)
+
+    def _tint_menu(self, combo, color):
+        """Tint a combobox's dropdown-list background. ttk restyles the listbox
+        when it posts, so reapply on <Map>. Cosmetic and fully guarded."""
+        try:
+            popdown = combo.tk.call("ttk::combobox::PopdownWindow", combo)
+            lb = f"{popdown}.f.l"
+            combo.tk.call(lb, "configure", "-background", color)
+            reapply = combo.register(
+                lambda: combo.tk.call(lb, "configure", "-background", color))
+            combo.tk.call("bind", lb, "<Map>", f"+{reapply}")
+        except Exception:
+            pass
+
+    def _money(self, amount):
+        """USD for the status bar. Verbose keeps full 6-decimal precision.
+        Otherwise two decimals — but a real cost that rounds down to zero
+        shows '<$0.01', never a bare '$0.00', so "there is a cost" reads
+        differently from "there is no cost"."""
+        if self.verbose:
+            return f"${amount:.6f}"
+        if amount <= 0:
+            return "$0.00"
+        if round(amount, 2) == 0:
+            return "<$0.01"
+        return f"${amount:.2f}"
+
+    @staticmethod
+    def _thousands(n):
+        """Group digits with apostrophes (Swiss style): 1234567 -> 1'234'567."""
+        return f"{n:,}".replace(",", "’")
+
     def _build_ui(self):
         top = ttk.Frame(self, padding=(12, 10, 12, 6))
         top.pack(fill="x")
 
-        ttk.Label(top, text="Model:").pack(side="left")
-        self.model = tk.StringVar(value=DEFAULT_MODEL)
-        model_box = ttk.Combobox(top, textvariable=self.model,
-                                 values=list(PRICING),
-                                 state="readonly", width=18)
-        model_box.pack(side="left", padx=(4, 12))
-
+        # Selectors in one left-hand column: Demos, Model, Persona, Curiosity,
+        # Size. All four menus share a single width (Size excepted), so load
+        # every list first and size to the longest entry across them all.
         self._config_errors = []
-        self.personas, err = load_choices(PERSONAS_FILE, DEFAULT_PERSONAS)
-        if err:
-            self._config_errors.append(err)
-        persona_label = ttk.Label(top, text="Persona:")
-        persona_label.pack(side="left")
+        self.personas, err_p = load_choices(PERSONAS_FILE, DEFAULT_PERSONAS)
+        self.curiosities, err_c = load_choices(CURIOSITIES_FILE,
+                                               DEFAULT_CURIOSITIES)
+        demos_now, err_d = load_bundles(DEMOS_FILE, DEFAULT_DEMOS)
+        for e in (err_p, err_c, err_d):
+            if e:
+                self._config_errors.append(e)
+        self.demo_bundles = {str(b["tag"]): b for b in demos_now}
+        cur_values = [NO_CURIOSITY] + list(self.curiosities)
+        # Cap the shared width so one long persona/demo name doesn't stretch
+        # the whole column; a clipped value is still legible via the hover
+        # panel over the open dropdown.
+        menu_w = min(18, max(self._fit_width(list(PRICING)),
+                             self._fit_width(self.personas),
+                             self._fit_width(cur_values),
+                             self._fit_width(list(self.demo_bundles)
+                                             + [NO_DEMO])))
+
+        selgrid = ttk.Frame(top)
+        selgrid.pack(side="left", anchor="n")
+
+        # Demos: a readonly Combobox — the same widget as the others, so the
+        # widths line up exactly (a Menubutton renders wider for the same char
+        # count, and chops when squeezed). Picking a tag loads that demo and
+        # the box then shows it; values reload with New, like the other lists.
+        ttk.Label(selgrid, text="Demos:").grid(row=0, column=0, sticky="w",
+                                               pady=1)
+        self.demo_choice = tk.StringVar(value=NO_DEMO)
+        self.demos_box = ttk.Combobox(selgrid, textvariable=self.demo_choice,
+                                      values=[NO_DEMO]
+                                      + list(self.demo_bundles),
+                                      height=len(self.demo_bundles) + 1,
+                                      state="readonly", width=menu_w)
+        self.demos_box.grid(row=0, column=1, sticky="w", padx=(4, 0), pady=1)
+        self.demos_box.bind("<<ComboboxSelected>>", self._on_demo_selected)
+
+        ttk.Label(selgrid, text="Model:").grid(row=1, column=0, sticky="w",
+                                               pady=1)
+        self.model = tk.StringVar(value=DEFAULT_MODEL)
+        self.model_box = ttk.Combobox(selgrid, textvariable=self.model,
+                                      values=list(PRICING), state="readonly",
+                                      width=menu_w)
+        self.model_box.grid(row=1, column=1, sticky="w", padx=(4, 0), pady=1)
+
+        ttk.Label(selgrid, text="Persona:").grid(row=2, column=0, sticky="w",
+                                                 pady=1)
         self.persona = tk.StringVar(value=next(iter(self.personas)))
-        # Width tracks the longest tag, so long persona names aren't clipped.
-        self.persona_box = ttk.Combobox(top, textvariable=self.persona,
-                                        values=list(self.personas),
-                                        height=len(self.personas),
-                                        state="readonly",
-                                        width=self._fit_width(self.personas))
-        self.persona_box.pack(side="left", padx=(4, 12))
+        self.persona_box = ttk.Combobox(selgrid, textvariable=self.persona,
+                                        values=[NO_PERSONAS]
+                                        + list(self.personas),
+                                        height=len(self.personas) + 1,
+                                        state="readonly", width=menu_w)
+        self.persona_box.grid(row=2, column=1, sticky="w", padx=(4, 0), pady=1)
 
-        self.curiosities, err = load_choices(CURIOSITIES_FILE,
-                                             DEFAULT_CURIOSITIES)
-        if err:
-            self._config_errors.append(err)
-        ttk.Label(top, text="Curiosity:").pack(side="left")
+        ttk.Label(selgrid, text="Curiosity:").grid(row=3, column=0, sticky="w",
+                                                   pady=1)
         self.curiosity = tk.StringVar(value=NO_CURIOSITY)
-        self.curiosity_box = ttk.Combobox(top, textvariable=self.curiosity,
-                                          values=[NO_CURIOSITY] + list(self.curiosities),
+        self.curiosity_box = ttk.Combobox(selgrid, textvariable=self.curiosity,
+                                          values=cur_values,
                                           height=len(self.curiosities) + 1,
-                                          state="readonly",
-                                          width=self._fit_width(self.curiosities))
-        self.curiosity_box.pack(side="left", padx=4)
+                                          state="readonly", width=menu_w)
+        self.curiosity_box.grid(row=3, column=1, sticky="w", padx=(4, 0),
+                                pady=1)
 
-        ttk.Label(top, text="Size:").pack(side="left", padx=(12, 0))
+        ttk.Label(selgrid, text="Size:").grid(row=4, column=0, sticky="w",
+                                              pady=1)
+        # sticky "ew" makes this row span column 1 (the combobox column) so the
+        # Reset button, packed to the RIGHT, lines its edge up with the menu
+        # comboboxes above; Size stays at the left.
+        sizerow = ttk.Frame(selgrid)
+        sizerow.grid(row=4, column=1, sticky="ew", padx=(4, 0), pady=1)
         self.font_size = tk.IntVar(value=DEFAULT_FONT_SIZE)
-        size_box = ttk.Combobox(top, textvariable=self.font_size,
+        size_box = ttk.Combobox(sizerow, textvariable=self.font_size,
                                 values=[str(s) for s in FONT_SIZES],
                                 state="readonly", width=3)
-        size_box.pack(side="left", padx=4)
+        size_box.pack(side="left")
         size_box.bind("<<ComboboxSelected>>", self._apply_font_size)
+        # Reset (not New): Demos / Persona / Curiosity back to (none) and the
+        # TOOLS boxes cleared, leaving the prompt and transcript untouched.
+        ttk.Button(sizerow, text="Reset", command=self._reset_menus).pack(
+            side="right")
 
         # Readonly comboboxes keep their value text highlighted after a
         # pick until focus moves — clear that selection immediately.
-        for box in (model_box, self.persona_box, self.curiosity_box,
-                    size_box):
+        for box in (self.demos_box, self.model_box, self.persona_box,
+                    self.curiosity_box, size_box):
             box.bind("<<ComboboxSelected>>",
                      lambda e: e.widget.selection_clear(), add="+")
+        # Long values clip in the narrow menus; a hover panel over an open
+        # dropdown shows an item's full text after a short delay.
+        self._attach_menu_hover(self.demos_box, textfn=self._demo_prompt)
+        self._attach_menu_hover(self.persona_box, textfn=self._persona_text)
+        self._attach_menu_hover(self.curiosity_box, textfn=self._curiosity_text)
+        self._attach_menu_hover(self.model_box)   # model id is self-explanatory
+        # Each selector may carry a BODY tint (its dropdown list) and a TOP
+        # tint (a filled "face" over the closed field — aqua won't colour the
+        # native field). A TOP constant left commented just means no fill.
+        for combo, var, key in (
+                (self.demos_box, self.demo_choice, "DEMOS"),
+                (self.persona_box, self.persona, "PERSONAS"),
+                (self.curiosity_box, self.curiosity, "CURIOSITIES")):
+            body_tint = globals().get(f"{key}_TINT_BODY")
+            top_tint = globals().get(f"{key}_TINT_TOP")
+            if body_tint:
+                self._tint_menu(combo, body_tint)
+            if top_tint:
+                self._add_face(combo, var, top_tint)
 
-        ttk.Button(top, text="API", command=self._load_api_key).pack(
-            side="left", padx=(12, 0))
-        ttk.Button(top, text="Me", command=self._load_me).pack(side="left",
-                                                                padx=4)
-        self.demos_btn = ttk.Button(top, text="Demos",
-                                    command=self._pick_demo)
-        self.demos_btn.pack(side="left", padx=4)
-        # New is the other big-deal button — same green chrome as Send: it
-        # wipes the conversation (and the web checkboxes) for a clean run.
-        self.update_idletasks()
-        new_font = tkfont.nametofont("TkDefaultFont").copy()
-        new_font.configure(weight="bold")
-        RoundButton(top, text="New", command=self._reset, font=new_font,
-                    width=self.demos_btn.winfo_reqwidth(),
-                    height=self.demos_btn.winfo_reqheight(),
-                    v_inset=3).pack(side="left", padx=4)
-
-        # The two server-side web tools, one checkbox each — the UI mirrors
-        # the API mechanism split (fetch is free beyond tokens; search
-        # carries a surcharge). Both default off: the control experiment.
-        # The block sits aligned under the Persona: label (measured, not
-        # guessed, so it tracks combobox widths), introduced by a vertical
-        # separator as a visual guide; the right edge stays free for
-        # future buttons. Inside the block the checkboxes stay
-        # left-aligned so the boxes line up vertically.
-        webrow = ttk.Frame(self, padding=(12, 2, 12, 4))
-        webrow.pack(fill="x")
-        self.update_idletasks()   # top row must be laid out to measure it
-        offset = max(0, persona_label.winfo_x() - 12)
-        # A thin outline groups the pair; it replaces the earlier separator.
-        checks = ttk.Frame(webrow, borderwidth=1, relief="solid",
+        # TOOLS block: the vertical gutter + the bordered checkbox box, its own
+        # free-standing frame to the right of the selectors (natural width, so
+        # the checkbox text isn't cramped). The three checkboxes ARE Anthropic
+        # API server-side *tools* — named in the request's `tools` list.
+        toolwrap = ttk.Frame(top)
+        checks = ttk.Frame(toolwrap, borderwidth=1, relief="solid",
                            padding=(8, 3))
-        checks.pack(side="left", padx=(offset, 0))
         self.fetch = tk.BooleanVar(value=False)
         self.search = tk.BooleanVar(value=False)
         self.sandbox = tk.BooleanVar(value=False)
@@ -522,6 +802,45 @@ class Workbench(tk.Tk):
             checks, variable=self.sandbox,
             text="Use API Linux Sandbox (free tier, then $0.05/hr)"
             ).pack(anchor="w")
+        self.update_idletasks()
+        box_h = checks.winfo_reqheight()
+        size_px = max(7, box_h // 6)
+        tools_font = tkfont.Font(size=-size_px)
+        while size_px > 6 and tools_font.metrics("linespace") * 5 > box_h:
+            size_px -= 1
+            tools_font.configure(size=-size_px)
+        ttk.Label(toolwrap, text="T\nO\nO\nL\nS", justify="center",
+                  font=tools_font, foreground="#000000").pack(side="left",
+                                                              padx=(0, 5))
+        checks.pack(side="left")
+        # Drop the box down one selector row, so its top lines up with Model
+        # rather than Demos (row height = the combobox plus its 1px pads).
+        # expand=True gives it the middle cavity between the (left) selectors
+        # and the (right) button stack, so it stays centred as the window
+        # widens; the selectors hold the left edge.
+        row_h = self.demos_box.winfo_reqheight() + 2
+        toolwrap.pack(side="left", anchor="n", expand=True, pady=(row_h, 0))
+
+        # Action buttons stacked vertically, pinned to the RIGHT edge so they
+        # follow it as the window widens (like Send/Save/Quit below). New on
+        # top (green, the primary action), then Help / API / Me.
+        bstack = ttk.Frame(top)
+        bstack.pack(side="right", anchor="n", padx=(8, 0))
+        BTN_W = 6
+        help_btn = ttk.Button(bstack, text="Help", width=BTN_W,
+                              command=self._show_help)
+        self.update_idletasks()
+        new_font = tkfont.nametofont("TkDefaultFont").copy()
+        new_font.configure(weight="bold")
+        RoundButton(bstack, text="New", command=self._reset, font=new_font,
+                    width=help_btn.winfo_reqwidth(),
+                    height=help_btn.winfo_reqheight(),
+                    v_inset=3).pack(pady=1)
+        help_btn.pack(pady=1)
+        ttk.Button(bstack, text="API", width=BTN_W,
+                   command=self._load_api_key).pack(pady=1)
+        ttk.Button(bstack, text="Me", width=BTN_W,
+                   command=self._load_me).pack(pady=1)
 
         # Transcript and entry share a vertical PanedWindow: the sash
         # between them can be dragged to grow the input area for long,
@@ -562,6 +881,8 @@ class Workbench(tk.Tk):
         self.view.mark_gravity("reply_start", "left")
 
         bottom = ttk.Frame(self.paned, padding=(0, 4, 0, 10))
+        # "Prompt" header sits at the top of this pane, above the input box.
+        self._section_label(bottom, "Prompt").pack(side="top", fill="x")
         # The button column is packed FIRST (from the right) so it always
         # keeps its size; the entry's nominal width stays small so its
         # font-dependent requested width can't squeeze the buttons out at
@@ -586,9 +907,24 @@ class Workbench(tk.Tk):
         self.entry = tk.Text(bottom, height=3, wrap="word", width=10,
                              padx=8, pady=6)
         self.entry.pack(side="left", fill="both", expand=True)
-        self.entry.bind("<Return>", self._on_return)   # Enter sends; Shift+Enter = newline
+        self.entry.bind("<Return>", self._on_return)       # Enter = Send
+        self.entry.bind("<KP_Enter>", self._on_return)
+        # Shift+Enter inserts a newline. Bind it explicitly (returning None
+        # lets the default insertion through) instead of testing event.state,
+        # which macOS reports unreliably for a plain Return — that misread was
+        # sending Enter to the newline path instead of Send.
+        self.entry.bind("<Shift-Return>", lambda e: None)
+        self.entry.bind("<Shift-KP_Enter>", lambda e: None)
+        # Enter also sends when focus is on a selector or button — e.g. right
+        # after picking a Demo, when the cursor never touched the prompt box.
+        # Bound window-wide; the prompt's binding above returns "break", so a
+        # focused prompt sends once, not twice. (An OPEN dropdown grabs Enter
+        # for its own item-select, so this doesn't interfere with picking.)
+        self.bind("<Return>", self._on_return)
+        self.bind("<KP_Enter>", self._on_return)
 
-        self.status = tk.StringVar(value="ready — $0.000000 this session")
+        self.status = tk.StringVar(
+            value=f"ready — {self._money(0.0)} this session")
         status_bar = ttk.Label(self, textvariable=self.status, anchor="w",
                                relief="sunken", padding=3)
 
@@ -597,6 +933,10 @@ class Workbench(tk.Tk):
         # (weight 1: it takes any height surplus), entry row below. The
         # sash between the panes is the drag handle.
         status_bar.pack(fill="x", side="bottom")
+        # "Response" header above the transcript (sits in the grey gap under
+        # the top bar). Packed before the paned window so it lands above it.
+        self._section_label(self, "Response").pack(side="top", fill="x",
+                                                   padx=12)
         self.paned.pack(fill="both", expand=True, padx=12, pady=(2, 0))
         self.paned.add(self.view, weight=1)
         self.paned.add(bottom, weight=0)
@@ -634,20 +974,33 @@ class Workbench(tk.Tk):
         settings, notes = load_settings()
         self._apply_prefs(settings, notes)
 
-    def _pick_demo(self):
-        """Demos button: read demos.json fresh and pop a menu of bundles.
-        Picking one sets the knobs and pre-fills the prompt — the text
-        stays editable before Send."""
-        demos, err = load_bundles(DEMOS_FILE, DEFAULT_DEMOS)
-        if err:
-            self._append(f"[{err}]\n", "note")
-        menu = tk.Menu(self, tearoff=0)
-        for bundle in demos:
-            menu.add_command(label=str(bundle["tag"]),
-                             command=lambda b=bundle: self._apply_demo(b))
-        menu.tk_popup(self.demos_btn.winfo_rootx(),
-                      self.demos_btn.winfo_rooty()
-                      + self.demos_btn.winfo_height())
+    def _show_help(self):
+        """Help button: show the same text the CLI's --help prints (usage,
+        options, and the project link) as a monospace terminal block, prefixed
+        with the command that produces it — reads like a real shell session,
+        not italic prose. Logged as code so a saved transcript reproduces it."""
+        block = ("$ python3 ./bin/curiosity-lab.py --help\n"
+                 + make_parser().format_help().rstrip("\n"))
+        self._append("\n", "meta")
+        self._append("\n", "md_codeblock")   # blank line inside the gray: top pad
+        self._append_code_block(block)
+        self._append("\n", "md_codeblock")   # ...and bottom pad, easier to eyeball
+        self.log.append({"kind": "code", "lang": "", "text": block})
+        # Repeat the project URL below as a real clickable link — taken from
+        # the last http(s) field in the help text.
+        urls = re.findall(r"https?://\S+", block)
+        if urls:
+            self._append("\n", "meta")
+            self._append_link(urls[-1], "curious")
+            self._append("\n", "meta")
+
+    def _on_demo_selected(self, event=None):
+        """Demos combobox: the picked tag names a bundle in self.demo_bundles;
+        load it. Values are refreshed from demos.json by New, like the other
+        selectors (see _reload_choices)."""
+        bundle = self.demo_bundles.get(self.demo_choice.get())
+        if bundle:
+            self._apply_demo(bundle)
 
     def _apply_demo(self, bundle):
         """Apply one demo bundle — the same machinery as settings.json,
@@ -692,7 +1045,8 @@ class Workbench(tk.Tk):
                              f"{settings['model']!r} — keeping "
                              f"{self.model.get()}")
         if "persona" in settings:
-            tag = match_tag(settings["persona"], self.personas)
+            tag = match_tag(settings["persona"],
+                            list(self.personas) + [NO_PERSONAS])
             if tag:
                 self.persona.set(tag)
             else:
@@ -725,13 +1079,12 @@ class Workbench(tk.Tk):
                              f"{self.font_size.get()}")
         if "geometry" in settings:
             geo = str(settings["geometry"]).strip()
-            pos = re.search(r"[+-]\d+[+-]\d+$", geo)
-            if pos and re.fullmatch(r"(\d+x\d+)?[+-]\d+[+-]\d+", geo):
-                self.geometry(pos.group())   # position only; size is ours
+            if re.fullmatch(r"(\d+x\d+)?[+-]\d+[+-]\d+", geo):
+                self.geometry(geo)   # size + position, both restored
             else:
                 notes.append(f"{source}: unreadable geometry "
                              f"{settings['geometry']!r} — expected "
-                             f"'+x+y'")
+                             f"'WxH+x+y'")
         if "apikey" in settings:
             raw_path = os.path.expanduser(str(settings["apikey"]).strip())
             path = (raw_path if os.path.isabs(raw_path)
@@ -803,7 +1156,13 @@ class Workbench(tk.Tk):
             bullet = re.match(r"(\s*)[-*]\s+(.*)", line)
             if heading:
                 level = min(len(heading.group(1)), 3)
-                self._append(heading.group(2) + nl, f"md_h{level}")
+                # Strip inline emphasis inside the heading (e.g. the model
+                # writes "## **Title**"): the heading is already styled, so a
+                # raw ** / * / ` would otherwise render as literal characters.
+                content = INLINE_MD.sub(
+                    lambda m: next(g for g in m.groups() if g is not None),
+                    heading.group(2))
+                self._append(content + nl, f"md_h{level}")
             elif re.fullmatch(r"(-{3,}|\*{3,}|_{3,})", line.strip()):
                 self._append("─" * 40 + nl, "md_rule")
             elif bullet:
@@ -832,6 +1191,19 @@ class Workbench(tk.Tk):
         if pos < len(line):
             self._append(line[pos:], "assistant")
 
+    def _reset_menus(self):
+        """Reset button: return the selectors to a blank slate without touching
+        the conversation. Demos / Persona / Curiosity go to (none) and the
+        TOOLS boxes clear; the prompt text, transcript, Model and Size are all
+        left as they are (that whole-conversation wipe is what New does)."""
+        self.demo_choice.set(NO_DEMO)
+        self.persona.set(NO_PERSONAS)
+        self.curiosity.set(NO_CURIOSITY)
+        self.fetch.set(False)
+        self.search.set(False)
+        self.sandbox.set(False)
+        self.status.set("selectors reset to (none); prompt and chat kept")
+
     def _reset(self):
         if self.streaming:
             return
@@ -840,14 +1212,15 @@ class Workbench(tk.Tk):
         self.fetch.set(False)              # web access is per-conversation:
         self.search.set(False)             # a clean run starts offline
         self.sandbox.set(False)            # ...and without the sandbox
+        self.demo_choice.set(NO_DEMO)      # forget the last preset
         if self.log and self.log[-1]["kind"] != "divider":
             self.log.append({"kind": "divider"})   # Save keeps the whole session
         self.view.configure(state="normal")
         self.view.delete("1.0", "end")
         self.view.configure(state="disabled")
         self._reload_choices()
-        self.status.set(f"new conversation, personas & curiosities reloaded "
-                        f"— session total: ${self.spend:.6f}")
+        self.status.set(f"new conversation, personas, curiosities & demos "
+                        f"reloaded — session total: {self._money(self.spend)}")
 
     def _reload_choices(self):
         """Re-read the JSON files (wired to New). A selection whose tag
@@ -856,20 +1229,33 @@ class Workbench(tk.Tk):
         self.personas, err_p = load_choices(PERSONAS_FILE, DEFAULT_PERSONAS)
         self.curiosities, err_c = load_choices(CURIOSITIES_FILE,
                                                DEFAULT_CURIOSITIES)
-        for err in (err_p, err_c):
+        demos_now, err_d = load_bundles(DEMOS_FILE, DEFAULT_DEMOS)
+        for err in (err_p, err_c, err_d):
             if err:
                 self._append(f"[{err}]\n", "note")
-        self.persona_box["values"] = list(self.personas)
-        self.persona_box["height"] = len(self.personas)
-        self.persona_box["width"] = self._fit_width(self.personas)
-        if self.persona.get() not in self.personas:
-            self.persona.set(next(iter(self.personas)))
-        self.curiosity_box["values"] = [NO_CURIOSITY] + list(self.curiosities)
+        self.demo_bundles = {str(b["tag"]): b for b in demos_now}
+        cur_values = [NO_CURIOSITY] + list(self.curiosities)
+        self.demos_box["values"] = [NO_DEMO] + list(self.demo_bundles)
+        self.demos_box["height"] = len(self.demo_bundles) + 1
+        self.persona_box["values"] = [NO_PERSONAS] + list(self.personas)
+        self.persona_box["height"] = len(self.personas) + 1
+        if (self.persona.get() != NO_PERSONAS
+                and self.persona.get() not in self.personas):
+            self.persona.set(NO_PERSONAS)
+        self.curiosity_box["values"] = cur_values
         self.curiosity_box["height"] = len(self.curiosities) + 1
-        self.curiosity_box["width"] = self._fit_width(self.curiosities)
         if (self.curiosity.get() != NO_CURIOSITY
                 and self.curiosity.get() not in self.curiosities):
             self.curiosity.set(NO_CURIOSITY)
+        # Keep the four menus the same (capped) width after a reload, too.
+        menu_w = min(18, max(self._fit_width(list(PRICING)),
+                             self._fit_width(self.personas),
+                             self._fit_width(cur_values),
+                             self._fit_width(list(self.demo_bundles)
+                                             + [NO_DEMO])))
+        for box in (self.demos_box, self.model_box, self.persona_box,
+                    self.curiosity_box):
+            box["width"] = menu_w
 
     # ---- send / stream ---------------------------------------------------
     def _show_user_turn(self, text, suffix, persona_hint=False, web_note=""):
@@ -881,8 +1267,12 @@ class Workbench(tk.Tk):
         if persona_hint:
             self._append("  [Persona changed mid-chat — replies may echo "
                          "the old voice; press New]\n", "note")
-        self._append(f"  [Persona “{persona}”: {self.personas[persona]}]\n",
-                     "meta")
+        if persona == NO_PERSONAS:
+            self._append("  [Persona “(none)” — no persona in the system "
+                         "prompt]\n", "meta")
+        else:
+            self._append(f"  [Persona “{persona}”: {self.personas[persona]}]"
+                         "\n", "meta")
         if self.me_text:
             self._append(f"  [Me-file “{self.me_name}” rides along, "
                          f"~{len(self.me_text) // 4} tokens]\n", "meta")
@@ -897,7 +1287,8 @@ class Workbench(tk.Tk):
     def _current_system(self):
         """The system prompt actually sent: the persona text plus, when
         loaded, the Me-file appended as context about the user."""
-        system = self.personas[self.persona.get()]
+        persona = self.persona.get()
+        system = "" if persona == NO_PERSONAS else self.personas.get(persona, "")
         if self.me_text:
             system += (f"\n\n[About the user — from their Me-file "
                        f"“{self.me_name}”]\n{self.me_text}")
@@ -917,9 +1308,9 @@ class Workbench(tk.Tk):
         tag = self.curiosity.get()
         return "" if tag == NO_CURIOSITY else "\n\n" + self.curiosities[tag]
 
-    def _on_return(self, event):
-        if event.state & 0x0001:   # Shift held -> let the default newline through
-            return None
+    def _on_return(self, event=None):
+        """Enter sends. Shift+Enter is bound separately to a newline, so there's
+        no fragile event.state check here."""
         self._send()
         return "break"
 
@@ -933,6 +1324,13 @@ class Workbench(tk.Tk):
             self._append("\n[the 'anthropic' package isn't installed — "
                          "run: pip install anthropic]\n", "note")
             return
+        if not getattr(self.client, "api_key", None):
+            self._append(
+                "\n[No API key set. Click API to load a key file, put "
+                "apikey.txt beside the app, or export ANTHROPIC_API_KEY "
+                "before launching — then Send again.]\n", "note")
+            self.status.set("no API key — see transcript")
+            return   # prompt is kept in the entry box
 
         self.entry.delete("1.0", "end")
         self._last_prompt = text
@@ -1068,7 +1466,7 @@ class Workbench(tk.Tk):
                     self.log.append({"kind": "note", "text": payload})
                     self._append(f"\n[{payload}]\n", "note")
                     self.status.set(f"error — see transcript    "
-                                    f"session total: ${self.spend:.6f}")
+                                    f"session total: {self._money(self.spend)}")
                     self._finish()
                 elif kind == "done":
                     self._on_done(*payload)
@@ -1145,16 +1543,18 @@ class Workbench(tk.Tk):
         self.spend += token_cost + search_cost
         elapsed = time.monotonic() - self._turn_start
         parts = [f"Elapsed: {elapsed:.1f}s (stopped)",
-                 f"Tokens: In {in_tok} (+${in_cost:.6f}) "
-                 f"/ Out {out_tok} (+${out_cost:.6f})"]
+                 f"Tokens: In {self._thousands(in_tok)} "
+                 f"({self._money(in_cost)}) / Out {self._thousands(out_tok)} "
+                 f"({self._money(out_cost)})"]
         if searches:
-            parts.append(f"Searches: {searches} (+${search_cost:.6f})")
+            parts.append(f"Searches: {searches} ({self._money(search_cost)})")
         if fetches:
             parts.append(f"Fetches: {fetches} (tokens only)")
         if runs:
             parts.append(f"Code runs: {runs} (free tier / $0.05/hr)")
         self.status.set("    |    ".join(parts)
-                        + f"    |    Session total: ${self.spend:.6f} (est)")
+                        + f"    |    Session total: {self._money(self.spend)}"
+                        + " (est)")
 
     def _on_done(self, model, msg):
         self._spinning = False   # stop before the final meter reading lands
@@ -1354,10 +1754,12 @@ class Workbench(tk.Tk):
         self.spend += token_cost + search_cost
         elapsed = time.monotonic() - self._turn_start
         parts = [f"Elapsed: {elapsed:.1f}s",
-                 f"Tokens: In {u.input_tokens} (+${in_cost:.6f}) "
-                 f"/ Out {u.output_tokens} (+${out_cost:.6f})"]
+                 f"Tokens: In {self._thousands(u.input_tokens)} "
+                 f"({self._money(in_cost)}) / Out "
+                 f"{self._thousands(u.output_tokens)} "
+                 f"({self._money(out_cost)})"]
         if searches:
-            parts.append(f"Searches: {searches} (+${search_cost:.6f})")
+            parts.append(f"Searches: {searches} ({self._money(search_cost)})")
         if fetches:
             parts.append(f"Fetches: {fetches} (tokens only)")
         runs = self._code_runs(msg)
@@ -1366,7 +1768,7 @@ class Workbench(tk.Tk):
             # figure — the one lab mechanism the meter cannot price.
             parts.append(f"Code runs: {runs} (free tier / $0.05/hr)")
         self.status.set("    |    ".join(parts)
-                        + f"    |    Session total: ${self.spend:.6f}")
+                        + f"    |    Session total: {self._money(self.spend)}")
 
     def _spin(self):
         """Live activity indicator in the status bar: a rotating glyph and
@@ -1402,15 +1804,13 @@ class Workbench(tk.Tk):
         self.destroy()
 
     def _save_geometry(self):
-        """Remember the window POSITION in settings.json — written on Quit
-        or window close, applied at next startup. The size is not saved:
-        the app computes its own natural size, so it always fits its
-        content. A missing settings file is created; a broken one is
-        left alone."""
-        pos = re.search(r"[+-]\d+[+-]\d+$", self.geometry())
-        if not pos:
+        """Remember the window SIZE and POSITION in settings.json — written on
+        Quit or window close, applied at next startup. The published file
+        ships without a Geometry item; it is seeded here on first save. A
+        missing settings file is created; a broken one is left alone."""
+        geo = self.geometry()   # "WxH+x+y" — size and position
+        if not re.fullmatch(r"\d+x\d+[+-]\d+[+-]\d+", geo):
             return
-        geo = pos.group()       # "+x+y" — position only
         path = os.path.join(CONFIG_DIR, SETTINGS_FILE)
         try:
             with open(path, encoding="utf-8") as f:
@@ -1589,24 +1989,35 @@ class Workbench(tk.Tk):
         return "\n".join(lines)
 
 
-if __name__ == "__main__":
+def make_parser():
+    """The CLI parser, shared by `--help` on the command line and the Help
+    button in the window, so both show the exact same text."""
     import argparse
 
     class _HelpFormat(argparse.RawDescriptionHelpFormatter):
-        """Keep the hand-wrapped description and end with a blank line."""
+        """Titled help: a version banner on top, capitalized section headers
+        (Usage / Options), the hand-wrapped description, trailing blank line."""
         def format_help(self):
-            return super().format_help() + "\n"
+            text = super().format_help()
+            text = text.replace("usage:", "Usage:", 1)
+            text = text.replace("\noptions:", "\nOptions:", 1)
+            return f"Curiosity Lab for Claude v{__version__}\n\n" + text + "\n"
 
     parser = argparse.ArgumentParser(
         prog="curiosity-lab",
         formatter_class=_HelpFormat,
         description="Curiosity Lab for Claude — a small chat window where "
                     "you pick a persona,\nadd curiosity to your questions, "
-                    "and watch what every answer costs.")
+                    "and watch what every answer costs.",
+        epilog=f"More info here:\n  {GITHUB_URL}")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="keep stderr visible (don't suppress Tk "
                              "file-dialog diagnostics)")
     parser.add_argument("-V", "--version", action="version",
-                        version=f"Curiosity Lab for Claude {__version__}")
-    args = parser.parse_args()
+                        version=f"Curiosity Lab for Claude v{__version__}")
+    return parser
+
+
+if __name__ == "__main__":
+    args = make_parser().parse_args()
     Workbench(verbose=args.verbose).mainloop()

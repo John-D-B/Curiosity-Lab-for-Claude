@@ -24,14 +24,14 @@ This project was inspired by an article in the **New York Times**:<br/>
 
 Her point: old search engines were clumsy, so finding anything meant wading<br/>
 &nbsp; &nbsp; through pages of near-misses — and the near-misses were where curiosity happened.<br/>
-A chatbot answers exactly the question you asked, so the accidental discoveries<br/>
-&nbsp; &nbsp; quietly disappeared along with the wading.
+A chatbot answers exactly the question you asked, so accidental discoveries quietly disappear.
 
 But **curiosity is a practice**, not a prescription.<br/>
 Nothing stops anyone from asking for the detours — sources, counterpoints, adjacent questions.<br/>
 So, why not build this practice into **Add Curiosity** buttons?
 
-**Curiosity Lab for Claude** is simple to use, and self-explanatory with the demos and menus.
+**Curiosity Lab for Claude** is simple to use, and self-explanatory,<br/>
+&nbsp; &nbsp; with demos and curiosity menus.
 
 <br/>
 

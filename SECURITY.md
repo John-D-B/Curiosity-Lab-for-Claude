@@ -1,4 +1,4 @@
-# Curiosity Lab for Claude — SAST Scan and Security Assessment
+# Curiosity Lab for Claude:<br/>SAST Scan and Security Assessment
 
 **Author:** JohnB, with AI pair-programming support by Anthropic Claude<br/>
 **Date:** 2026-07-11<br/>

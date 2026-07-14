@@ -30,8 +30,8 @@ But **curiosity is a practice**, not a prescription.<br/>
 Nothing stops anyone from asking for the detours — sources, counterpoints, adjacent questions.<br/>
 So, why not build this practice into **Add Curiosity** buttons?
 
-**Curiosity Lab for Claude** is simple to use, and self-explanatory,<br/>
-&nbsp; &nbsp; with demos and curiosity menus.
+**Curiosity Lab for Claude** is simple to use and self-explanatory,<br/>
+&nbsp; &nbsp; with **demos** and **curiosity menus**.
 
 <br/>
 

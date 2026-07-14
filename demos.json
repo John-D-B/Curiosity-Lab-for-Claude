@@ -98,5 +98,13 @@
     "Curiosity": "Sources",
     "Sandbox": true,
     "Prompt": "In the sandbox, compute the Mandelbrot set with numpy (vectorized, not per-pixel Python loops) and matplotlib, using the parameters at the end of this message. Color the exterior by a log-scaled smooth escape-time with the colormap named below, and paint the interior black. Keep the pixels square — size the grid to the coordinate ranges so the set isn't stretched. Save it as mandelbrot.png. Show me the script first, then show the colormaps in a multicolumn list, then run it and report the compute time and the PNG size.\n\nParameters:\nreal range: [-2.5, 1.0]\nimag range: [-1.25, 1.25]\nresolution (long side): 2000\nmax iterations: 500\ncolormap: turbo"
+  },
+  {
+    "tag": "Python script: PI digits",
+    "Model": "claude-sonnet",
+    "Persona": "Concise",
+    "Curiosity": "(none)",
+    "Sandbox": false,
+    "Prompt": "In the sandbox, using mpmath, search the first 100,000,000 fractional digits of pi for the target sequence at the end of this message (first strip its non-digits with str.isdigit). SHOW ME the complete script before you run it, and re-show the full script whenever you fix or change it, so I can see exactly what runs. Have the script FIRST print one line - the cleaned target and its length - so I can confirm the parse. Then search in cells of 250,000 digits each so I can watch progress; after that confirmation line, each cell prints only ONE result line (running total searched, found or not) - never the pi digits, never per-digit or per-round logging. Between cells, YOU add one short sentence of progress. Do NOT write any summary, README, or documentation files. Report only what the runs actually returned; quote the cleaned target exactly as the script printed it, never from memory; never guess a position. The target sequence is 1776-07-04"
   }
 ]

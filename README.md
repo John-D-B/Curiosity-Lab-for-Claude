@@ -4,9 +4,9 @@
 *Curiosity killed the cat. Satisfaction brought him back.*<br/>
 
 **Curiosity Lab for Claude** is a Python Chat app, a front-end to the Anthropic API engine.
-1. Press Send to get a fast, cheap response.
-2. Change menu entries (Model, Persona, Curiosity), press Send.
-3. Select a Demo, press Send.
+1. Press **Send** to get a fast, cheap response.
+2. Change menu entries (**Model, Persona, Curiosity**), or **Prompt** text, press Send.
+3. Select a **Demo**, press Send.
 
 <p align="left">
   <img src="images/zHero.png" alt="Curiosity Lab: pick a persona, add a curiosity rider, watch the meter">

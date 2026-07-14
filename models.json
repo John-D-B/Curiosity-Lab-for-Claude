@@ -1,10 +1,11 @@
 [
   {
-    "tag": "Opus",
-    "model": "claude-opus-4-8",
-    "input": 5.0,
-    "output": 25.0,
-    "note": "Most capable Opus-tier; standard rate"
+    "tag": "Haiku",
+    "model": "claude-haiku-4-5",
+    "input": 1.0,
+    "output": 5.0,
+    "note": "Cheapest — the sensible default for practice",
+    "default": true
   },
   {
     "tag": "Sonnet",
@@ -14,12 +15,11 @@
     "note": "Intro rate through 2026-08-31 (sticker 3 / 15)"
   },
   {
-    "tag": "Haiku",
-    "model": "claude-haiku-4-5",
-    "input": 1.0,
-    "output": 5.0,
-    "note": "Cheapest — the sensible default for practice",
-    "default": true
+    "tag": "Opus",
+    "model": "claude-opus-4-8",
+    "input": 5.0,
+    "output": 25.0,
+    "note": "Most capable Opus-tier; standard rate"
   },
   {
     "tag": "Fable",

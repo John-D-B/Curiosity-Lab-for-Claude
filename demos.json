@@ -62,12 +62,12 @@
     "Prompt": "My colleague keeps rewriting my commits. Should I confront him?"
   },
   {
-    "tag": "Claude Delusion joke",
+    "tag": "Jokes",
     "Model": "claude-sonnet",
-    "Persona": "Limerick",
-    "Curiosity": "Sources",
+    "Persona": "Gemini",
+    "Curiosity": "Misunderstanding",
     "Search": true,
-    "Prompt": "Tell me a humorous joke about Richard Dawkins and his Claude Delusion."
+    "Prompt": "Tell me a humorous joke about AI, or LLMs, or Robots"
   },
   {
     "tag": "Teach me OAuth",

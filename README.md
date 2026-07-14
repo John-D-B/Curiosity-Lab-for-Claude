@@ -3,16 +3,12 @@
 
 *Curiosity killed the cat. Satisfaction brought him back.*<br/>
 
-**Curiosity Lab for Claude** is a Python chat app for the Anthropic API:<br/>
-&nbsp; &nbsp; easy selectors for Claude **Model**, **Persona** style, **Curiosity** riders, and **Demo** bundles —<br/>
-&nbsp; &nbsp; plus a running cost meter, so every answer shows what it cost. Typically: under a cent.
+**Curiosity Lab for Claude** is a Python Chat app, a front-end to the Anthropic API engine.
+1. Press Send to get a fast, cheap response.
+2. Change menu entries (Model, Persona, Curiosity), press Send.
+3. Select a Demo, press Send.
 
-Your prompt stays in the box after each reply —<br/>
-&nbsp; &nbsp; change a selector, press **Send**, and compare.<br/>
-Or press **New** and re-send unchanged, and the answers differ anyway:<br/>
-&nbsp; &nbsp; LLM non-determinism is a feature, not a bug.
-
-<p align="center">
+<p align="left">
   <img src="images/zHero.png" alt="Curiosity Lab: pick a persona, add a curiosity rider, watch the meter">
 </p>
 
@@ -32,34 +28,36 @@ A chatbot answers exactly the question you asked, so the accidental discoveries<
 &nbsp; &nbsp; quietly disappeared along with the wading.
 
 But **curiosity is a practice**, not a prescription.<br/>
-Nothing stops anyone from asking for the detours — sources, counterpoints,<br/>
-&nbsp; &nbsp; adjacent questions. So why not put that habit on a button?
+Nothing stops anyone from asking for the detours — sources, counterpoints, adjacent questions.<br/>
+So, why not build this practice into **Add Curiosity** buttons?
 
-I proposed an **Add Curiosity button** as a small engineering exercise —<br/>
-&nbsp; &nbsp; and three days later, **Curiosity Lab for Claude** was born!
+**Curiosity Lab for Claude** is simple to use, and self-explanatory with the demos and menus.
 
 <br/>
 
 ### 1A. The Laboratory Knobs
 
 <details>
-<summary>The selection menus, one by one.</summary>
+<summary>These are the menu selectors.</summary>
 
 | Knob | What it does |
 |---|---|
-| **Model** | Fable / Opus / Sonnet / Haiku — same question, different brain, different bill |
+| **Model** |  Haiku / Sonnet / Opus / Fable — same question, different brain, different bill. |
 | **Persona** | Tells Claude who to be and how to talk, selected by tag from file `personas.json` |
 | **Curiosity** | A rider appended to your message, from file `curiosities.json` |
+| **Web-fetch** | Checkbox:<br/>Let Claude retrieve the full text of URLs appearing in the dialog.<br/>No per-fetch fee; the fetched text bills as input tokens. |
+| **Web-search** | Checkbox:<br/>Let Claude search the Internet for recent information ($0.01 per search) |
+| **Linux-sandbox** | Checkbox:<br/>Let Claude write and run Python/bash in an Anthropic-hosted Linux container.<br/>Images in the sandbox (charts, fractals) are shown in the Response panel. |
 | **API** | Loads your API key from a file — the no-terminal alternative (section 2B) |
 | **Me** | Loads a Markdown *Me-file* so the model knows you — visibly, at a visible price |
 | **Demos** | Pick a ready-made bundle — persona, curiosity, prompt, from file `demos.json` |
 | **Size** | Font size of the transcript and input box |
-| **New** | Start a fresh conversation; re-reads the JSON configs; the session total cost survives |
-| **Save** | Exports the whole session as a dated Markdown file, eg: `2026-07-11.chat.md` |
-| **Quit** | Closes the window — its position is remembered for next launch, in file `settings.json` |
+| **New** | Start a fresh conversation:<br/>- re-reads the JSON configs<br/>- web checkboxes reset to off.<br/>The prompt and total session costs are kept. |
+| **Save** | Exports the whole session as a dated Markdown file,<br/>eg: `2026-07-11.chat.md`<br/>Sandbox images are embedded inline and also written to a file. |
+| **Quit** | Closes the window.<br/>Size and position are saved in file `settings.json` |
 
 Every prompt-text injection is shown in the transcript — persona, Me-file, Curiosity rider —<br/>
-&nbsp; &nbsp; because *what you see is what was sent is what's billed*.
+&nbsp; &nbsp; because *what you see is what was sent, and is what is billed*.
 </details>
 
 ### 1B. Requirements
@@ -145,7 +143,7 @@ load a key file from any location, at any time — same careful handling.
 
 ```bash
 $ export ANTHROPIC_API_KEY=sk-ant-...          # Bash: this terminal only
-$ ./bin/curiosity-lab.py
+$ python3 ./bin/curiosity-lab.py
 ```
 
 ```powershell
@@ -198,7 +196,7 @@ With no key set, Curiosity Lab's first send shows the auth error in the transcri
 $ git clone https://github.com/John-D-B/Curiosity-Lab-for-Claude.git
 $ cd Curiosity-Lab-for-Claude
 $ pip install -r bin/requirements.txt
-$ ./bin/curiosity-lab.py
+$ python3 ./bin/curiosity-lab.py
 ```
 
 Flags for later:<br/>
@@ -225,7 +223,7 @@ The app reads these at startup, and on every press of button **New**.
 |---|---|
 | `personas.json` | A Persona tells the model who to be and how to talk.<br/>It applies to every reply in the conversation. |
 | `curiosities.json` | A Curiosity is an extra text request added to the end of every message you send.<br/>For example: *"Also name your sources"* or *"Offer a counterpoint."* |
-| `settings.json` | startup preferences: `Model`, `Persona`, `Curiosity`, `Size`, `Prompt`, `Mefile`<br/>The window position (`Geometry`) is remembered automatically. |
+| `settings.json` | startup preferences: `Model`, `Persona`, `Curiosity`, `Size`, `Prompt`, `Mefile`, `Fetch`, `Search`, `Sandbox`<br/>The window position (`Geometry`) is remembered automatically. |
 | `demos.json` | Ready-made bundles for the **Demos** button:<br/>A `tag` plus any settings keys (`Geometry` excluded) — share your own combos. |
 | `me.template.md` | Copy to `me.md`, fill in the sections, load with button **Me**. |
 | `apikey.txt` | Your API key, one line (optional; auto-loaded at startup).<br/> Do not share this file, or commit/push it into a repository. |
@@ -268,33 +266,90 @@ Run one persona on `haiku`, then on a larger model. Small models ham it up<br/>
 &nbsp; &nbsp; (or refuse); large models get the reasoning style right, not just the costume.<br/>
 &nbsp; &nbsp; The meter shows what the extra fidelity cost.
 
+- **This week's news, twice:**<br/>
+Ask about something from the past few days with both web boxes off, then on.<br/>
+&nbsp; &nbsp; Watch who admits ignorance, what each search cost, and where the sources<br/>
+&nbsp; &nbsp; came from — the annotations show every search and fetch the model made.
+
+- **The tool nobody used:**<br/>
+Enable web access but add "answer from memory only" to your question.<br/>
+&nbsp; &nbsp; A tool that is available but declined is itself a result:<br/>
+&nbsp; &nbsp; the model decides when to search, and you can talk it out of it.
+
+- **Imagined vs. actual execution:**<br/>
+Ask a model to "write a script and run it" with the sandbox OFF — small<br/>
+&nbsp; &nbsp; models will happily fabricate the output (the Lab warns you, at Send,<br/>
+&nbsp; &nbsp; that nothing can actually run). Turn the sandbox ON and ask again: now<br/>
+&nbsp; &nbsp; the code really runs, and the transcript shows the actual commands and<br/>
+&nbsp; &nbsp; their output. A calculator can't lie about arithmetic.
+
+- **A picture, not a wall of text:**<br/>
+Pick the **Mandelbrot** demo (sandbox on). The model writes a vectorized<br/>
+&nbsp; &nbsp; numpy script, runs it, and the fractal it draws renders right in the<br/>
+&nbsp; &nbsp; transcript — the first demo whose deliverable is an image. Raise the<br/>
+&nbsp; &nbsp; resolution or iterations to watch the compute time (and the meter) climb.
+
 </details>
 
 ### 3C. Costs and the meter
 
-Prices per model live in the `PRICING` dict at the top of `bin/curiosity-lab.py` —<br/>
-&nbsp; &nbsp; update them when Anthropic's price list changes.
+<details>
+<summary>Most queries cost pennies or less, with **Haiku**.</summary>
+<br/>
+
+Prices per model live in **`models.json`** beside the app — edit it (in GitHub or by<br/>
+&nbsp; &nbsp; hand) when Anthropic's price list changes, no code edit needed. Each entry pairs a<br/>
+&nbsp; &nbsp; short menu name with a pinned model ID and its input / output prices; the model<br/>
+&nbsp; &nbsp; menu shows the name, and hovering shows the ID, prices, and a note.
 
 Because the full history is resent on every call, conversation cost grows with<br/>
 &nbsp; &nbsp; *size × turns*, not size once. Watch the input-token count climb as a chat<br/>
 &nbsp; &nbsp; gets longer — the meter is the curriculum.
 
+Web access adds two more lines to that curriculum: each search costs a flat<br/>
+&nbsp; &nbsp; $0.01, while fetches are free — but the retrieved pages and results are<br/>
+&nbsp; &nbsp; billed as input tokens, and the meter counts both per call.
+
+The Linux sandbox is the meter's one blind spot. It is billed by container<br/>
+&nbsp; &nbsp; time ($0.05/hour after a generous monthly free allowance, and free when<br/>
+&nbsp; &nbsp; used alongside web access), but the API does not report that time — so the<br/>
+&nbsp; &nbsp; meter shows a **run count**, not a dollar figure. It is the one mechanism<br/>
+&nbsp; &nbsp; the Lab cannot price exactly, and says so.
+</details>
+
 <br/>
 
 ## 4. Privacy and security
+
+<details>
+<summary>Details</summary>
 
 - **What leaves your machine:**<br/>
 The persona text, the loaded Me-file, and the full<br/>
 &nbsp; &nbsp; chat history are sent to `api.anthropic.com` on **every** call — nowhere else.<br/>
 &nbsp; &nbsp; Load only Me-file content you are comfortable sending.
 
+- **Web access is proxied:**<br/>
+With the web boxes on, searches go from Anthropic to its search provider<br/>
+&nbsp; &nbsp; (currently Brave) carrying only the model-composed query — no identity,<br/>
+&nbsp; &nbsp; IP address, or location attached. Fetches retrieve pages via Anthropic's<br/>
+&nbsp; &nbsp; proxy, not from your machine.
+
+- **The sandbox runs on Anthropic's servers, not yours:**<br/>
+With the Linux-sandbox box on, code Claude writes runs in an Anthropic-hosted<br/>
+&nbsp; &nbsp; container with **no internet access** — nothing executes on your machine,<br/>
+&nbsp; &nbsp; and the container cannot reach out from theirs.
+
 - **Your API key** comes from the environment, or from a key file you provide<br/>
 &nbsp; &nbsp; (`apikey.txt` / the **API** button). Curiosity Lab never logs it, never<br/>
 &nbsp; &nbsp; writes it anywhere, and never displays more than its last four characters.
 - **Model output is rendered inert** — styled text only; no HTML engine, no script<br/>
 &nbsp; &nbsp; execution, no code path from a reply to your system.
+</details>
 
-A full **SAST Security scan** and assessment is in file `SECURITY.md`:<br/>
+<br/>
+
+A full **SAST Security scan** and assessment is in file `SECURITY.md` :<br/>
   - Bandit
   - Semgrep
   - pip-audit — zero findings
@@ -329,10 +384,14 @@ Copyright © 2026, Mountain Informatik GmbH. Original software by John Buehrer.
 <summary>For consideration.</summary>
 <br/>
 
-1. **Farm mode:**<br/>
+1. **Run scripts locally, in addtion to Cloud sandbox**<br/>
+Implement a new "tool function": allow running scripts on the local PC or Mac, eg:<br/><br/>
+`[ ] Use local Bash on this PC to run scripts (free, requires setup and trust)`
+
+2. **Farm mode:**<br/>
 Send one question to multiple model/persona pairs in parallel, rendered side by side.
 
-2. **RAG Library: Local data retrieval**<br/>
+3. **RAG Library: Local data retrieval**<br/>
 A folder picker plus keyword retrieval, injecting document chunks as visibly<br/>
 &nbsp; &nbsp; as the Me-file — and letting the meter compare retrieval against<br/>
 &nbsp; &nbsp; whole-document context caching.

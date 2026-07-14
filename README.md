@@ -67,7 +67,7 @@ Every prompt-text injection is shown in the transcript — persona, Me-file, Cur
 
 - **Python 3.10+** with Tkinter — standard on macOS and Windows;<br/>
 &nbsp; &nbsp; on Debian/Ubuntu: `sudo apt install python3-tk`
-- The **`anthropic`** SDK (installed below)
+- The **`anthropic`** SDK and **Pillow** (both installed below)
 - An Anthropic **Console** account, an API key, and a few dollars of prepaid credits
 </details>
 
@@ -113,7 +113,7 @@ https://raw.githubusercontent.com/John-D-B/Curiosity-Lab-for-Claude/main/README.
 https://github.com/John-D-B/Curiosity-Lab-for-Claude/archive/refs/heads/main.zip
 
 3. Check that Python 3.10+ with Tkinter is installed, and install the
-"anthropic" package if needed.
+dependencies from bin/requirements.txt (the "anthropic" SDK and Pillow).
 
 4. Launch the app, and tell me how to launch it again myself later.
 ```

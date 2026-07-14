@@ -1,1 +1,10 @@
-anthropic
+# Curiosity Lab for Claude — runtime dependencies
+#
+# anthropic: floor pinned per SECURITY.md CL-SAST-01 (2026-07-14) so fresh
+#   installs get a known-audited baseline; the beta features the app uses
+#   (code execution, Files API, web tools) need a recent SDK. 0.116 is audited.
+anthropic>=0.116
+#
+# Installed by default for consistent thumbnails (smooth downscaling + JPEG/WebP),
+# but not required at runtime: the app falls back to native Tk (with a note) if absent.
+pillow>=10

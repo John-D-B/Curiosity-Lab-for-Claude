@@ -53,9 +53,10 @@ try:
 except ImportError:
     anthropic = None
 
-# Pillow is OPTIONAL (v2.9.0). Native Tk renders PNG/GIF with integer-only
-# scaling; Pillow adds smooth downscaling and JPEG/WebP. The app degrades
-# gracefully to native Tk when Pillow isn't importable — no new hard dependency.
+# Pillow is a DEFAULT dependency (requirements.txt), not a runtime requirement:
+# it's installed so every user's inline thumbnails render identically — smooth
+# downscaling, plus JPEG/WebP. Soft-imported, so if it's absent the app still
+# runs on a native Tk fallback (PNG/GIF, blockier scaling) and _build_ui notes it.
 try:
     from PIL import Image, ImageTk
 except ImportError:
@@ -798,6 +799,11 @@ class Workbench(tk.Tk):
         for e in (err_p, err_c, err_d, err_m):
             if e:
                 self._config_errors.append(e)
+        if Image is None:   # a default dep, but absence is tolerated — just note it
+            self._config_errors.append(
+                "Pillow not found — inline image thumbnails will use lower-"
+                "quality scaling, and JPEG/WebP won't display. Install it with "
+                "'pip install pillow' (see bin/requirements.txt).")
         self.demo_bundles = {str(b["tag"]): b for b in demos_now}
         self._build_model_catalog(models_now)
         cur_values = [NO_CURIOSITY] + list(self.curiosities)
@@ -2005,9 +2011,9 @@ class Workbench(tk.Tk):
 
     def _make_photo(self, raw, mime):
         """Return (PhotoImage, (orig_w, orig_h)) scaled to <= IMAGE_MAX_WIDTH,
-        or (None, None) if the bytes can't be decoded here. Pillow (optional)
-        gives smooth downscaling and JPEG/WebP; without it, native Tk handles
-        PNG/GIF with integer subsampling only. Reported dims are the ORIGINAL
+        or (None, None) if the bytes can't be decoded here. Pillow (a default
+        dependency, soft-imported) gives smooth downscaling and JPEG/WebP; the
+        native Tk fallback handles PNG/GIF with integer subsampling only. Reported dims are the ORIGINAL
         size, so the note reflects what the sandbox produced, not the thumbnail."""
         cap = IMAGE_MAX_WIDTH
         if Image is not None and ImageTk is not None:

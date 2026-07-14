@@ -1,7 +1,7 @@
 [
   {
     "tag": "Introspection",
-    "Model": "claude-haiku",
+    "Model": "haiku",
     "Persona": "Claude",
     "Curiosity": "Sources",
     "Fetch": true,
@@ -10,7 +10,7 @@
   },
   {
     "tag": "Show Claude costs",
-    "Model": "claude-haiku",
+    "Model": "haiku",
     "Persona": "Concise",
     "Curiosity": "(none)",
     "Fetch": true,
@@ -19,7 +19,7 @@
   },
   {
     "tag": "Curiosity Lab: Unique?",
-    "Model": "claude-haiku",
+    "Model": "haiku",
     "Persona": "Claude",
     "Curiosity": "Sources",
     "Fetch": true,
@@ -28,42 +28,42 @@
   },
   {
     "tag": "Which AI should I buy?",
-    "Model": "claude-haiku",
+    "Model": "haiku",
     "Persona": "ChatGPT",
     "Curiosity": "(none)",
     "Prompt": "Which AI assistant should I subscribe to?"
   },
   {
     "tag": "Pirate wisdom",
-    "Model": "claude-haiku",
+    "Model": "haiku",
     "Persona": "Pirate",
     "Curiosity": "Questions",
     "Prompt": "Should I get out of bed tomorrow morning?"
   },
   {
     "tag": "Skeptic vs. microservices",
-    "Model": "claude-sonnet",
+    "Model": "sonnet",
     "Persona": "Skeptic",
     "Curiosity": "Counterpoint",
     "Prompt": "We switched to microservices and productivity doubled. Should everyone do it?"
   },
   {
     "tag": "Skeptic vs. Kubernetes",
-    "Model": "claude-sonnet",
+    "Model": "sonnet",
     "Persona": "Skeptic",
     "Curiosity": "Counterpoint",
     "Prompt": "I heard that much software has switched to Kubernetes. Should everyone do it?"
   },
   {
     "tag": "Agony Aunt: commit wars",
-    "Model": "claude-haiku",
+    "Model": "haiku",
     "Persona": "Agony Aunt",
     "Curiosity": "(none)",
     "Prompt": "My colleague keeps rewriting my commits. Should I confront him?"
   },
   {
     "tag": "Jokes",
-    "Model": "claude-sonnet",
+    "Model": "sonnet",
     "Persona": "Gemini",
     "Curiosity": "Misunderstanding",
     "Search": true,
@@ -71,21 +71,21 @@
   },
   {
     "tag": "Teach me OAuth",
-    "Model": "claude-sonnet",
+    "Model": "sonnet",
     "Persona": "Teacher",
     "Curiosity": "Sources",
     "Prompt": "Explain how OAuth login works, like I'm smart but new to it."
   },
   {
     "tag": "Grok's hot take",
-    "Model": "claude-haiku",
+    "Model": "haiku",
     "Persona": "XGrok",
     "Curiosity": "Misunderstanding",
     "Prompt": "Is a hotdog a sandwich?"
   },
   {
     "tag": "Sandbox introspection",
-    "Model": "claude-haiku",
+    "Model": "haiku",
     "Persona": "Concise",
     "Curiosity": "(none)",
     "Sandbox": true,
@@ -93,7 +93,7 @@
   },
   {
     "tag": "Mandelbrot in sandbox",
-    "Model": "claude-haiku",
+    "Model": "haiku",
     "Persona": "Concise",
     "Curiosity": "Sources",
     "Sandbox": true,
@@ -101,7 +101,7 @@
   },
   {
     "tag": "Python script: PI digits",
-    "Model": "claude-sonnet",
+    "Model": "sonnet",
     "Persona": "Concise",
     "Curiosity": "(none)",
     "Sandbox": false,

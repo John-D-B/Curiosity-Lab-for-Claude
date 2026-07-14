@@ -32,7 +32,7 @@ with or endorsed by Anthropic.
 
 from __future__ import annotations
 
-__version__ = "2.9.0"
+__version__ = "2.10.0"
 
 import base64
 import datetime
@@ -65,23 +65,34 @@ except ImportError:
 # - Prefer to read this from the scipt's --help option:
 GITHUB_URL = "https://github.com/John-D-B/Curiosity-Lab-for-Claude"
 
-# Price per 1M tokens (USD): (input, output). Standard rates.
-
-PRICING = {
-    "claude-fable-5":   (10.0, 50.0),
-    "claude-opus-4-8":  (5.0, 25.0),
-    "claude-sonnet-5":  (2.0, 10.0),   # intro rate through 2026-08-31 (sticker: 3.0 / 15.0)
-    "claude-haiku-4-5": (1.0, 5.0),
-}
-DEFAULT_MODEL = "claude-haiku-4-5"   # cheapest — the sensible default for practice
+# The model catalog + prices live in an editable models.json (v2.10.0), so a
+# version bump or a price change is a data edit, not a code change. Each entry
+# is {tag, model, input, output, note}: `tag` is the friendly Model-menu label,
+# `model` the pinned API model ID, input/output the USD-per-1M-token rates, and
+# an optional `default: true` picks the startup selection. DEFAULT_MODELS below
+# is the built-in fallback — written on first run, and used if the file breaks.
+DEFAULT_MODELS = [
+    {"tag": "Opus",   "model": "claude-opus-4-8",  "input": 5.0,  "output": 25.0,
+     "note": "Most capable Opus-tier; standard rate"},
+    {"tag": "Sonnet", "model": "claude-sonnet-5",  "input": 2.0,  "output": 10.0,
+     "note": "Intro rate through 2026-08-31 (sticker 3 / 15)"},
+    {"tag": "Haiku",  "model": "claude-haiku-4-5", "input": 1.0,  "output": 5.0,
+     "note": "Cheapest — the sensible default for practice", "default": True},
+    {"tag": "Fable",  "model": "claude-fable-5",   "input": 10.0, "output": 50.0,
+     "note": "Most capable widely-released model"},
+]
+DEFAULT_MODEL = "claude-haiku-4-5"   # placeholder in-flight model before any send
 MAX_TOKENS = 4096
 
 # Server-side web tools (v2.6.0), declared per-request when the checkboxes
 # are on. The dated type tags are Anthropic's frozen contract versions, not
-# build stamps; the basic variants below run on every model in PRICING.
+# build stamps; the basic variants below run on every model in the catalog.
 # Search carries a per-use surcharge; fetch bills only the tokens the
 # fetched page occupies. Update SEARCH_COST with Anthropic's price list —
 # the checkbox label and the meter both read it.
+# TODO (later review): SEARCH_COST is also a hard-coded price that will drift,
+# but its shape is per-use, not per-token, so it doesn't fit a models.json row
+# cleanly. Left in code for v2.10.0; revisit whether to externalise it too.
 SEARCH_COST = 10.0 / 1000            # USD per search
 SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search",
                "max_uses": 5}
@@ -93,7 +104,7 @@ FETCH_TOOL = {"type": "web_fetch_20250910", "name": "web_fetch",
 # bash, 1 CPU / 5 GiB, NO internet). Free up to the org's monthly container-
 # hour allowance, then $0.05/hour — but the API does not report container
 # time in `usage`, so the meter can COUNT runs, not price them. GA, no beta
-# header; every model in PRICING accepts the tool type.
+# header; every catalog model accepts the tool type.
 EXEC_TOOL = {"type": "code_execution_20260521", "name": "code_execution"}
 
 # A server-tool turn can pause (stop_reason "pause_turn") and be resumed by
@@ -180,6 +191,16 @@ NO_CURIOSITY = "(none)"
 CURIOSITIES_TINT_BODY = "#E2F3FE"  ## "#FFFEDE"
 
 SETTINGS_FILE = "settings.json"
+
+MODELS_FILE = "models.json"   # model catalog + prices (v2.10.0); editable, reloads on New
+## MODELS_TINT_TOP = "..."
+# Light grey, but nudged off the macOS system window grey (~#ECECEC) so it
+# actually contrasts. Swap in whichever reads best on your screen:
+## MODELS_TINT_BODY = "#E3E7EB"   # cool grey (faint blue cast) — the intentional look
+## MODELS_TINT_BODY = "#E0E0E0"   # neutral, just darker
+## MODELS_TINT_BODY = "#EAE7E1"   # warm grey (faint sand cast)
+## MODELS_TINT_BODY = "#EAE7E1"   # warm grey (faint sand cast)
+MODELS_TINT_BODY = "#fff9e6"
 
 APIKEY_FILE = "apikey.txt"   # auto-loaded at startup when present
 
@@ -618,6 +639,69 @@ class Workbench(tk.Tk):
             #     import sys
             #     print("[hover] attach FAILED", file=sys.stderr)
 
+    def _build_model_catalog(self, models_list):
+        """Build the Model menu + prices from a models.json list (v2.10.0).
+        self.models: tag -> {model, input, output, note} in file order (which
+        is the menu order). self.pricing: model-id -> (input, output) for the
+        meter. self._default_model_tag: the entry flagged `default`, else the
+        first. Forgiving — a malformed entry contributes what it can."""
+        self.models = {}
+        self.pricing = {}
+        self._default_model_tag = None
+        for m in models_list:
+            tag = str(m.get("tag", "")).strip()
+            if not tag:
+                continue
+            mid = str(m.get("model", "")).strip()
+            try:
+                price = (float(m.get("input", 0.0)),
+                         float(m.get("output", 0.0)))
+            except (TypeError, ValueError):
+                price = (0.0, 0.0)
+            self.models[tag] = {"model": mid, "input": price[0],
+                                "output": price[1],
+                                "note": str(m.get("note", "")).strip()}
+            if mid:
+                self.pricing[mid] = price
+            if m.get("default") and self._default_model_tag is None:
+                self._default_model_tag = tag
+        if self._default_model_tag is None and self.models:
+            self._default_model_tag = next(iter(self.models))
+
+    def _model_id(self, tag):
+        """The API model ID for a menu tag; falls back to the tag itself."""
+        entry = self.models.get(tag)
+        return entry["model"] if entry and entry["model"] else tag
+
+    def _model_text(self, tag):
+        """Model hover: the pinned model ID, its per-1M-token prices, and note."""
+        m = self.models.get(tag)
+        if not m:
+            return tag
+        price = f"${m['input']:g} in / ${m['output']:g} out per 1M tokens"
+        parts = [m["model"] or "(no model id — fix models.json)", price]
+        if m["note"]:
+            parts.append(m["note"])
+        return "  —  ".join(parts)
+
+    def _resolve_model_tag(self, raw):
+        """Map a config Model value to a catalog tag. Accepts a tag ("Haiku"),
+        a full model ID ("claude-haiku-4-5"), or a family name ("claude-haiku",
+        "haiku"). Case-insensitive, "."→"-" forgiving; a family resolves to the
+        cheapest match. Keeps old demos/settings working after v2.10.0."""
+        val = str(raw).strip()
+        tag = match_tag(val, list(self.models))          # 1. exact menu tag
+        if tag:
+            return tag
+        ident = val.replace(".", "-").lower()            # 2. model id / family
+        matches = [t for t, m in self.models.items()
+                   if m["model"] and (m["model"].lower() == ident
+                       or m["model"].lower().startswith(ident)
+                       or m["model"].lower().startswith("claude-" + ident))]
+        if matches:
+            return min(matches, key=lambda t: self.models[t]["input"])
+        return None
+
     def _demo_prompt(self, tag):
         """Tooltip text for a Demos item: its prompt (what Send will fire),
         not the tag echoed back. Falls back to the tag if there's no prompt."""
@@ -710,15 +794,17 @@ class Workbench(tk.Tk):
         self.curiosities, err_c = load_choices(CURIOSITIES_FILE,
                                                DEFAULT_CURIOSITIES)
         demos_now, err_d = load_bundles(DEMOS_FILE, DEFAULT_DEMOS)
-        for e in (err_p, err_c, err_d):
+        models_now, err_m = load_bundles(MODELS_FILE, DEFAULT_MODELS)
+        for e in (err_p, err_c, err_d, err_m):
             if e:
                 self._config_errors.append(e)
         self.demo_bundles = {str(b["tag"]): b for b in demos_now}
+        self._build_model_catalog(models_now)
         cur_values = [NO_CURIOSITY] + list(self.curiosities)
         # Cap the shared width so one long persona/demo name doesn't stretch
         # the whole column; a clipped value is still legible via the hover
         # panel over the open dropdown.
-        menu_w = min(18, max(self._fit_width(list(PRICING)),
+        menu_w = min(18, max(self._fit_width(list(self.models)),
                              self._fit_width(self.personas),
                              self._fit_width(cur_values),
                              self._fit_width(list(self.demo_bundles)
@@ -744,10 +830,11 @@ class Workbench(tk.Tk):
 
         ttk.Label(selgrid, text="Model:").grid(row=1, column=0, sticky="w",
                                                pady=1)
-        self.model = tk.StringVar(value=DEFAULT_MODEL)
+        self.model = tk.StringVar(value=self._default_model_tag)
         self.model_box = ttk.Combobox(selgrid, textvariable=self.model,
-                                      values=list(PRICING), state="readonly",
-                                      width=menu_w)
+                                      values=list(self.models),
+                                      height=len(self.models) + 1,
+                                      state="readonly", width=menu_w)
         self.model_box.grid(row=1, column=1, sticky="w", padx=(4, 0), pady=1)
 
         ttk.Label(selgrid, text="Persona:").grid(row=2, column=0, sticky="w",
@@ -799,12 +886,13 @@ class Workbench(tk.Tk):
         self._attach_menu_hover(self.demos_box, textfn=self._demo_prompt)
         self._attach_menu_hover(self.persona_box, textfn=self._persona_text)
         self._attach_menu_hover(self.curiosity_box, textfn=self._curiosity_text)
-        self._attach_menu_hover(self.model_box)   # model id is self-explanatory
+        self._attach_menu_hover(self.model_box, textfn=self._model_text)
         # Each selector may carry a BODY tint (its dropdown list) and a TOP
         # tint (a filled "face" over the closed field — aqua won't colour the
         # native field). A TOP constant left commented just means no fill.
         for combo, var, key in (
                 (self.demos_box, self.demo_choice, "DEMOS"),
+                (self.model_box, self.model, "MODELS"),
                 (self.persona_box, self.persona, "PERSONAS"),
                 (self.curiosity_box, self.curiosity, "CURIOSITIES")):
             body_tint = globals().get(f"{key}_TINT_BODY")
@@ -1132,23 +1220,17 @@ class Workbench(tk.Tk):
         in the transcript and skipped."""
         if "model" in settings:
             raw_model = str(settings["model"]).strip()
-            model = raw_model.replace(".", "-")
-            if model not in PRICING:
-                # A bare family name ("claude-sonnet", "sonnet") resolves to
-                # its PRICING entry, so config files aren't locked to
-                # version numbers across model bumps. An ambiguous name
-                # ("claude" matches everything) resolves to the CHEAPEST
-                # match. The combobox shows what was resolved.
-                matches = [k for k in PRICING
-                           if k.startswith(model)
-                           or k.startswith("claude-" + model)]
-                if matches:
-                    model = min(matches, key=lambda k: PRICING[k])
-            if model in PRICING:
-                self.model.set(model)
-                if "." in raw_model:
+            # The combobox now holds a catalog TAG ("Haiku"), but config files
+            # may carry a tag, a full model ID ("claude-haiku-4-5"), or a bare
+            # family name ("claude-sonnet", "sonnet") — so old demos/settings
+            # keep working across model bumps. A family resolves to the
+            # CHEAPEST match; the combobox shows what was resolved.
+            tag = self._resolve_model_tag(raw_model)
+            if tag:
+                self.model.set(tag)
+                if tag.lower() != raw_model.lower() and "." in raw_model:
                     notes.append(f"{source}: model {raw_model!r} is "
-                                 f"not a valid model ID — using '{model}'; "
+                                 f"not a valid model ID — using '{tag}'; "
                                  f"please fix the file")
             else:
                 notes.append(f"{source}: unknown model "
@@ -1341,13 +1423,19 @@ class Workbench(tk.Tk):
         self.curiosities, err_c = load_choices(CURIOSITIES_FILE,
                                                DEFAULT_CURIOSITIES)
         demos_now, err_d = load_bundles(DEMOS_FILE, DEFAULT_DEMOS)
-        for err in (err_p, err_c, err_d):
+        models_now, err_m = load_bundles(MODELS_FILE, DEFAULT_MODELS)
+        for err in (err_p, err_c, err_d, err_m):
             if err:
                 self._append(f"[{err}]\n", "note")
         self.demo_bundles = {str(b["tag"]): b for b in demos_now}
+        self._build_model_catalog(models_now)
         cur_values = [NO_CURIOSITY] + list(self.curiosities)
         self.demos_box["values"] = [NO_DEMO] + list(self.demo_bundles)
         self.demos_box["height"] = len(self.demo_bundles) + 1
+        self.model_box["values"] = list(self.models)
+        self.model_box["height"] = len(self.models) + 1
+        if self.model.get() not in self.models:
+            self.model.set(self._default_model_tag)
         self.persona_box["values"] = [NO_PERSONAS] + list(self.personas)
         self.persona_box["height"] = len(self.personas) + 1
         if (self.persona.get() != NO_PERSONAS
@@ -1359,7 +1447,7 @@ class Workbench(tk.Tk):
                 and self.curiosity.get() not in self.curiosities):
             self.curiosity.set(NO_CURIOSITY)
         # Keep the four menus the same (capped) width after a reload, too.
-        menu_w = min(18, max(self._fit_width(list(PRICING)),
+        menu_w = min(18, max(self._fit_width(list(self.models)),
                              self._fit_width(self.personas),
                              self._fit_width(cur_values),
                              self._fit_width(list(self.demo_bundles)
@@ -1392,7 +1480,7 @@ class Workbench(tk.Tk):
         if suffix:
             self._append("  " + suffix.strip() + "\n", "curious")
         self._append("\n" + text + "\n", "prompt")
-        self._append(f"\n{self.model.get()}:\n", "user")
+        self._append(f"\n{self._model_id(self.model.get())}:\n", "user")
         self.view.mark_set("reply_start", "end-1c")   # re-render point
 
     def _current_system(self):
@@ -1495,7 +1583,7 @@ class Workbench(tk.Tk):
                          "curiosity": self.curiosity.get() if suffix else "",
                          "web": web_note})
         self._show_user_turn(text, suffix, persona_hint, web_note)
-        self._begin_turn(self.model.get(), self._current_system(),
+        self._begin_turn(self._model_id(self.model.get()), self._current_system(),
                          list(self.history), tools)
 
     def _begin_turn(self, model, system, messages, tools):
@@ -1713,7 +1801,7 @@ class Workbench(tk.Tk):
         figure carries (est) because the final usage never arrived. Input
         tokens are exact (set at message_start); output is the count so far;
         any search that already ran is included."""
-        rate_in, rate_out = PRICING.get(model, (0.0, 0.0))
+        rate_in, rate_out = self.pricing.get(model, (0.0, 0.0))
         u = getattr(snap, "usage", None) if snap is not None else None
         in_tok = getattr(u, "input_tokens", 0) or 0
         out_tok = getattr(u, "output_tokens", 0) or 0
@@ -2009,7 +2097,7 @@ class Workbench(tk.Tk):
         """The meter: one parenthesized sub-cost per mechanism — tokens,
         then searches — and the session total sums them. Zero counts are
         not shown; fetched pages already appear inside the token count."""
-        rate_in, rate_out = PRICING.get(model, (0.0, 0.0))
+        rate_in, rate_out = self.pricing.get(model, (0.0, 0.0))
         u = msg.usage
         in_cost = u.input_tokens * rate_in / 1_000_000
         out_cost = u.output_tokens * rate_out / 1_000_000

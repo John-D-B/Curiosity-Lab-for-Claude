@@ -1,0 +1,66 @@
+[
+  {
+    "brand": "openai",
+    "default": true,
+    "input": 0.04,
+    "model": "gpt-oss-120b",
+    "note": "Cheapest general model — the Melious default (reliable in live testing)",
+    "output": 0.20,
+    "tag": "GPT-OSS 120B",
+    "vendor": "Melious"
+  },
+  {
+    "brand": "qwen",
+    "input": 0.08,
+    "model": "qwen3-32b",
+    "note": "Balanced open-weight (streaming was flaky in live testing 2026-07-16)",
+    "output": 0.24,
+    "tag": "Qwen3 32B",
+    "vendor": "Melious"
+  },
+  {
+    "brand": "meta",
+    "input": 0.10,
+    "model": "llama-3.3-70b-instruct",
+    "note": "Meta's workhorse",
+    "output": 0.30,
+    "tag": "Llama 3.3 70B",
+    "vendor": "Melious"
+  },
+  {
+    "brand": "deepseek",
+    "input": 0.20,
+    "model": "deepseek-v3.1",
+    "note": "Strong reasoning",
+    "output": 0.80,
+    "tag": "DeepSeek V3.1",
+    "vendor": "Melious"
+  },
+  {
+    "brand": "qwen",
+    "input": 0.25,
+    "model": "qwen2.5-vl-72b-instruct",
+    "note": "Vision-capable — for image prompts",
+    "output": 0.75,
+    "tag": "Qwen2.5-VL 72B",
+    "vendor": "Melious"
+  },
+  {
+    "brand": "mistral",
+    "input": 1.50,
+    "model": "mistral-medium-3.5-128b",
+    "note": "Premium; vision-capable",
+    "output": 5.00,
+    "tag": "Mistral Medium 3.5",
+    "vendor": "Melious"
+  },
+  {
+    "brand": "zai",
+    "input": 1.50,
+    "model": "glm-5.2",
+    "note": "Premium reasoning",
+    "output": 4.50,
+    "tag": "GLM 5.2",
+    "vendor": "Melious"
+  }
+]

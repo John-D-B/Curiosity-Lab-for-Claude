@@ -32,7 +32,7 @@ with or endorsed by Anthropic.
 
 from __future__ import annotations
 
-__version__ = "2.10.0"
+__version__ = "3.0.0"
 
 import base64
 import datetime
@@ -203,7 +203,29 @@ MODELS_FILE = "models.json"   # model catalog + prices (v2.10.0); editable, relo
 ## MODELS_TINT_BODY = "#EAE7E1"   # warm grey (faint sand cast)
 MODELS_TINT_BODY = "#fff9e6"
 
-APIKEY_FILE = "apikey.txt"   # auto-loaded at startup when present
+APIKEY_FILE = "apikey.txt"   # auto-loaded at startup when present (generic fallback)
+
+# Vendors (v3.0.0): a provider endpoint the Lab can target. Each vendor carries
+# its own base_url, currency, key file, key env var, and logo. Claude is the
+# built-in default (base_url None => the SDK default, api.anthropic.com); Melious
+# is an EU open-weight router that also speaks the Anthropic Messages API, at a
+# different base URL and in euros. The map lives in an editable vendors.json,
+# same first-run-write / malformed-fallback pattern as the other configs.
+#   Note (v3.0.0): Melious returns its `environment_impact` energy block only on
+#   its OpenAI-shaped /v1/chat/completions endpoint, NOT on the Anthropic
+#   /v1/messages path this app uses — confirmed live 2026-07-15. So the energy
+#   meter is deferred; a Melious turn notes the gap rather than showing a blank.
+VENDORS_FILE = "vendors.json"
+DEFAULT_VENDOR = "Claude"
+MELIOUS_MODELS_FILE = "models-melious.json"   # Melious catalog, merged with models.json
+DEFAULT_VENDORS = {
+    "Claude": {"base_url": None, "currency": "$",
+               "key_file": "apikey-claude.txt", "key_env": "ANTHROPIC_API_KEY",
+               "logo": "icon-claude.png"},
+    "Melious": {"base_url": "https://api.melious.ai", "currency": "€",
+                "key_file": "apikey-melious.txt", "key_env": "MELIOUS_API_KEY",
+                "logo": "icon-melious.png"},
+}
 
 DEMOS_FILE = "demos.json"
 NO_DEMO = "(none)"
@@ -318,7 +340,9 @@ def load_settings():
     return normalize_keys(raw, notes, SETTINGS_FILE), notes
 
 
-SETTINGS_ALIASES = {"model": "model", "models": "model",
+SETTINGS_ALIASES = {"vendor": "vendor", "vendors": "vendor",
+                    "provider": "vendor",
+                    "model": "model", "models": "model",
                     "persona": "persona", "personas": "persona",
                     "tone": "persona", "tones": "persona",  # pre-1.9 names
                     "curiosity": "curiosity", "curiosities": "curiosity",
@@ -372,6 +396,87 @@ def load_bundles(filename, defaults):
     except json.JSONDecodeError as exc:
         error = f"{filename}: {exc} — using built-in demos"
     return defaults, error
+
+
+def load_vendors():
+    """Return ({name: vendor-dict}, error) from vendors.json in CONFIG_DIR.
+    Same contract as load_choices/load_bundles: first run writes the defaults
+    so there is a file to edit; a malformed file falls back to the built-in
+    DEFAULT_VENDORS without being overwritten, and the error is surfaced. Each
+    vendor dict carries base_url, currency, key_file, key_env, logo — missing
+    keys are backfilled from the matching default so a partial edit still runs.
+    Claude is always present (re-added from the default if a hand edit drops it),
+    since the app must have a home vendor."""
+    path = os.path.join(CONFIG_DIR, VENDORS_FILE)
+    error = None
+    raw = None
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict) or not raw:
+            error = f"{VENDORS_FILE}: expected a non-empty object — using defaults"
+            raw = None
+    except FileNotFoundError:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(DEFAULT_VENDORS, f, indent=2, ensure_ascii=False)
+    except json.JSONDecodeError as exc:
+        error = f"{VENDORS_FILE}: {exc} — using defaults"
+    if raw is None:
+        raw = {k: dict(v) for k, v in DEFAULT_VENDORS.items()}
+    # Backfill each vendor's missing fields from the built-in default (by name),
+    # and guarantee the home vendor exists.
+    vendors = {}
+    for name, entry in raw.items():
+        base = dict(DEFAULT_VENDORS.get(name, {}))
+        if isinstance(entry, dict):
+            base.update(entry)
+        base.setdefault("base_url", None)
+        base.setdefault("currency", "$")
+        base.setdefault("key_file", None)
+        base.setdefault("key_env", None)
+        base.setdefault("logo", None)
+        vendors[str(name)] = base
+    if DEFAULT_VENDOR not in vendors:
+        vendors[DEFAULT_VENDOR] = dict(DEFAULT_VENDORS[DEFAULT_VENDOR])
+    return vendors, error
+
+
+def load_model_catalog():
+    """Return (merged_models, errors): models.json (Claude — first-run-written
+    and malformed-fallback as before, vendor defaulted to Claude downstream)
+    plus models-melious.json (the Melious catalog) when that file is present.
+    The Melious file is an optional curated add-on — absent means Claude-only,
+    not an error; malformed means it's ignored with a note, never overwritten."""
+    errors = []
+    claude, err = load_bundles(MODELS_FILE, DEFAULT_MODELS)
+    if err:
+        errors.append(err)
+    merged = list(claude)
+    mpath = os.path.join(CONFIG_DIR, MELIOUS_MODELS_FILE)
+    if os.path.exists(mpath):
+        try:
+            with open(mpath, encoding="utf-8") as f:
+                mel = json.load(f)
+            if isinstance(mel, list):
+                merged += [b for b in mel
+                           if isinstance(b, dict) and b.get("tag")]
+            else:
+                errors.append(f"{MELIOUS_MODELS_FILE}: expected a list of "
+                              f"models — ignored")
+        except json.JSONDecodeError as exc:
+            errors.append(f"{MELIOUS_MODELS_FILE}: {exc} — ignored")
+    return merged, errors
+
+
+def demos_file_for_vendor(vendor):
+    """Demos are vendor-specific (v3.0.0): `demos-<vendor>.json` in CONFIG_DIR when
+    present — a curated subset that works on that vendor — else the default
+    `demos.json`. So Melious can show only the demos it supports, without spamming
+    'not available here' for tool demos, and each vendor's set updates on its own."""
+    specific = f"demos-{str(vendor).strip().lower()}.json"
+    if os.path.exists(os.path.join(CONFIG_DIR, specific)):
+        return specific
+    return DEMOS_FILE
 
 
 def match_tag(value, tags):
@@ -567,16 +672,28 @@ class Workbench(tk.Tk):
     def __init__(self, verbose=False):
         super().__init__()
         self.verbose = verbose          # -v | --verbose: keep stderr visible
-        self.title(f"Curiosity Lab for Claude - v{__version__} - using API tokens")
         self.protocol("WM_DELETE_WINDOW", self._quit)   # red dot saves too
 
-        self.client = anthropic.Anthropic() if anthropic else None
+        # Vendors (v3.0.0): load the vendor map, pick the active vendor (a
+        # settings.json "Vendor" may override below), resolve each vendor's key
+        # once, and build the client for the active vendor. BOTH vendors' keys
+        # are held so a Vendor switch needs no re-auth and never clobbers
+        # ANTHROPIC_API_KEY (each key is passed explicitly to its own client).
+        self.vendors, self._vendor_err = load_vendors()
+        self.vendor = tk.StringVar(value=DEFAULT_VENDOR)
+        self._session_keys = {}          # vendor -> key set via the API button, this run
+        self.vendor_keys = {}            # vendor -> key resolved at startup
+        self._resolve_vendor_keys()
+        self.client = None
+        self._build_client_for_vendor(DEFAULT_VENDOR)
+        self._sync_title()
+
         self.history: list[dict] = []   # the conversation — WE own it, WE resend it
         self.log: list[dict] = []       # session journal for Save (survives New)
         self.me_text = ""               # Me-file contents (rides in the system prompt)
         self.me_name = ""
         self._last_sent_persona = None  # detects mid-chat persona switches
-        self.spend = 0.0                # running USD estimate this session
+        self.spend = {}                 # currency symbol -> running total this session
         self.q: queue.Queue = queue.Queue()
         self.streaming = False
         self._spinning = False             # drives the live activity spinner
@@ -591,6 +708,7 @@ class Workbench(tk.Tk):
         #                                    otherwise and the picture vanishes
 
         self._build_ui()
+        self._sync_vendor_logo()   # show the startup vendor's logo
         # The app picks a sensible default size (wide enough for the top bar,
         # tall enough to read); the last SIZE and POSITION are then restored
         # from settings.json by _apply_settings below — see _save_geometry.
@@ -599,9 +717,11 @@ class Workbench(tk.Tk):
         self._welcome()   # greet the empty Response area with how to begin
         for err in self._config_errors:
             self._append(f"[{err}]\n", "note")
-        default_key = os.path.join(CONFIG_DIR, APIKEY_FILE)
-        if os.path.exists(default_key):
-            self._set_api_key(default_key)   # settings/env still documented
+        # Per-vendor keys are already resolved (apikey-<vendor>.txt / key_env /
+        # apikey.txt) and the active vendor's client is built — just report the
+        # active vendor's key state. _apply_settings may then switch vendor.
+        self._sync_tool_guards()
+        self._announce_startup_key()
         self._apply_settings()
         # Launched from a terminal, Tk windows on macOS start BEHIND the
         # launcher. Briefly claim topmost, then let go.
@@ -641,33 +761,257 @@ class Workbench(tk.Tk):
             #     print("[hover] attach FAILED", file=sys.stderr)
 
     def _build_model_catalog(self, models_list):
-        """Build the Model menu + prices from a models.json list (v2.10.0).
-        self.models: tag -> {model, input, output, note} in file order (which
-        is the menu order). self.pricing: model-id -> (input, output) for the
-        meter. self._default_model_tag: the entry flagged `default`, else the
-        first. Forgiving — a malformed entry contributes what it can."""
-        self.models = {}
+        """Build the per-vendor Model catalog + prices from a merged models list
+        (v3.0.0: models.json + models-melious.json). Each entry may carry a
+        `vendor` (absent => Claude, so the pre-vendor catalog stays valid) and a
+        `brand`. self._models_by_vendor: vendor -> {tag: entry} in file order
+        (the menu order). self.pricing: model-id -> (input, output) across ALL
+        vendors, so a bill is priced right even just after a vendor switch.
+        self._vendor_default_tag: vendor -> its `default`-flagged tag (else its
+        first). _apply_vendor_catalog then narrows to the active vendor, keeping
+        self.models == "the active vendor's tags" (what the Model menu and the
+        layout test rely on). Forgiving — a malformed entry contributes what it can."""
+        self._models_by_vendor = {}
         self.pricing = {}
-        self._default_model_tag = None
+        self._vendor_by_model = {}      # model-id -> vendor, for per-turn currency
+        self._vendor_default_tag = {}
         for m in models_list:
             tag = str(m.get("tag", "")).strip()
             if not tag:
                 continue
+            vendor = (str(m.get("vendor", "") or DEFAULT_VENDOR).strip()
+                      or DEFAULT_VENDOR)
             mid = str(m.get("model", "")).strip()
             try:
                 price = (float(m.get("input", 0.0)),
                          float(m.get("output", 0.0)))
             except (TypeError, ValueError):
                 price = (0.0, 0.0)
-            self.models[tag] = {"model": mid, "input": price[0],
-                                "output": price[1],
-                                "note": str(m.get("note", "")).strip()}
+            entry = {"model": mid, "input": price[0], "output": price[1],
+                     "note": str(m.get("note", "")).strip(),
+                     "vendor": vendor, "brand": str(m.get("brand", "")).strip()}
+            self._models_by_vendor.setdefault(vendor, {})[tag] = entry
             if mid:
                 self.pricing[mid] = price
-            if m.get("default") and self._default_model_tag is None:
-                self._default_model_tag = tag
+                self._vendor_by_model[mid] = vendor
+            if m.get("default") and vendor not in self._vendor_default_tag:
+                self._vendor_default_tag[vendor] = tag
+        for vendor, entries in self._models_by_vendor.items():
+            if vendor not in self._vendor_default_tag and entries:
+                self._vendor_default_tag[vendor] = next(iter(entries))
+        self._apply_vendor_catalog()
+
+    def _apply_vendor_catalog(self):
+        """Narrow the catalog to the ACTIVE vendor: set self.models (tag ->
+        entry, in menu order) and self._default_model_tag from the per-vendor
+        maps. Called on build, on vendor change, and after a reload."""
+        vendor = self._active_vendor()
+        self.models = dict(self._models_by_vendor.get(vendor, {}))
+        self._default_model_tag = self._vendor_default_tag.get(vendor)
         if self._default_model_tag is None and self.models:
             self._default_model_tag = next(iter(self.models))
+
+    def _active_vendor(self):
+        """The selected vendor name; DEFAULT_VENDOR before the widget exists
+        or if the selection isn't a known vendor."""
+        var = getattr(self, "vendor", None)
+        name = var.get() if var is not None else DEFAULT_VENDOR
+        return name if name in getattr(self, "vendors", ()) else DEFAULT_VENDOR
+
+    def _vendor_currency(self):
+        """Currency symbol for the active vendor ('$' default)."""
+        return self.vendors.get(self._active_vendor(), {}).get("currency", "$")
+
+    def _currency_for_model(self, model):
+        """Currency symbol for the vendor that owns `model` (the model that
+        actually served the turn), so a bill is priced in the right currency
+        even if the Vendor knob was flipped mid-stream. Falls back to the active
+        vendor's currency, then '$'."""
+        vendor = getattr(self, "_vendor_by_model", {}).get(model)
+        if vendor and vendor in self.vendors:
+            return self.vendors[vendor].get("currency", "$")
+        return self._vendor_currency()
+
+    def _load_logo(self, filename, target_h=34):
+        """Load a vendor logo from images/<filename>, scaled to ~target_h px.
+        Pillow when present (smooth, any format), else native Tk (PNG/GIF).
+        Returns a PhotoImage or None — a missing/undecodable file never crashes."""
+        if not filename:
+            return None
+        path = os.path.join(CONFIG_DIR, "images", filename)
+        if not os.path.exists(path):
+            return None
+        try:
+            if Image is not None:
+                im = Image.open(path)
+                w, h = im.size
+                if h > target_h:
+                    im = im.resize((max(1, round(w * target_h / h)), target_h))
+                return ImageTk.PhotoImage(im)
+            photo = tk.PhotoImage(file=path)
+            if photo.height() > target_h:
+                photo = photo.subsample(max(1, photo.height() // target_h))
+            return photo
+        except Exception:   # noqa: BLE001 — cosmetic; degrade to no logo
+            return None
+
+    def _sync_vendor_logo(self):
+        """Set the centre-band logo to the active vendor's image (vendors.json)."""
+        lbl = getattr(self, "vendor_logo", None)
+        if lbl is None:
+            return
+        fn = self.vendors.get(self._active_vendor(), {}).get("logo")
+        photo = self._load_logo(fn)
+        self._vendor_logo_ref = photo   # keep a ref — Tk GCs the image otherwise
+        lbl.configure(image=photo if photo else "")
+
+    def _sync_eco(self):
+        """Show the bottom Eco row only for vendors whose endpoint carries an
+        environmental readout. Claude's Anthropic endpoint returns no
+        `environment_impact` block, so the row is hidden there — an empty
+        reservation just looks broken. Melious keeps it as a labelled
+        placeholder until the energy data is wired in. Packed `before` the
+        status bar so it stays the very bottom row; pack_forget removes it."""
+        if not hasattr(self, "eco_bar"):
+            return
+        if self._active_vendor() == DEFAULT_VENDOR:
+            self.eco_bar.pack_forget()
+            return
+        self.eco.set("🌱 Eco:  energy · carbon · water · renewable %    —    "
+                     "reserved; environmental data not wired for this endpoint yet")
+        self.eco_bar.pack(fill="x", side="bottom", before=self.status_bar)
+
+    def _read_key_file(self, path):
+        """First whitespace-delimited token of a key file, or '' on any error."""
+        try:
+            with open(path, encoding="utf-8") as f:
+                content = f.read().strip()
+        except OSError:
+            return ""
+        return content.split()[0] if content else ""
+
+    def _resolve_vendor_keys(self):
+        """Resolve a startup key for EACH vendor, independently, first match
+        wins: apikey-<vendor>.txt (per the vendor's key_file) -> key_env env
+        var (MELIOUS_API_KEY / ANTHROPIC_API_KEY) -> apikey.txt (the generic
+        fallback). A session key from the API button (self._session_keys) is
+        layered on top at client-build time. Because this runs for every vendor
+        at startup, flipping Vendor needs no re-pick. The value is passed
+        explicitly to that vendor's client, so Melious never borrows Claude's
+        ANTHROPIC_API_KEY and vice-versa."""
+        generic = os.path.join(CONFIG_DIR, APIKEY_FILE)
+        generic_key = self._read_key_file(generic) if os.path.exists(generic) else ""
+        for name, v in self.vendors.items():
+            key = ""
+            kf = v.get("key_file")
+            if kf:
+                path = os.path.join(CONFIG_DIR, kf)
+                if os.path.exists(path):
+                    key = self._read_key_file(path)
+            if not key and v.get("key_env"):
+                key = os.environ.get(v["key_env"], "") or ""
+            if not key:
+                key = generic_key
+            self.vendor_keys[name] = key
+
+    def _build_client_for_vendor(self, vendor):
+        """(Re)build self.client for `vendor`: its resolved key (session key
+        wins) passed explicitly, plus its base_url when it has one. Passing the
+        key explicitly (even '') stops the SDK from auto-reading ANTHROPIC_API_KEY
+        for a non-Claude vendor. A falsy key leaves client.api_key falsy, which
+        the existing no-key Send guard already handles."""
+        if anthropic is None:
+            self.client = None
+            return
+        key = self._session_keys.get(vendor) or self.vendor_keys.get(vendor) or ""
+        base = self.vendors.get(vendor, {}).get("base_url")
+        kwargs = {"api_key": key}
+        if base:
+            kwargs["base_url"] = base
+        self.client = anthropic.Anthropic(**kwargs)
+
+    def _sync_title(self):
+        """Window title reflects the active vendor."""
+        self.title(f"Curiosity Lab for {self._active_vendor()} "
+                   f"- v{__version__} - using API tokens")
+
+    def _on_vendor_selected(self, event=None):
+        """Vendor combobox change: rebuild the client (base_url + that vendor's
+        key), narrow the Model menu to the vendor's catalog, set the currency,
+        swap the title, and guard the tools the vendor can't run. Fail loud —
+        the transcript names what changed and what the vendor lacks; nothing is
+        dropped silently."""
+        vendor = self._active_vendor()
+        self._build_client_for_vendor(vendor)
+        self._apply_vendor_catalog()
+        # Refresh the Model menu to this vendor's tags; keep a valid selection.
+        tags = list(self.models)
+        self.model_box["values"] = tags
+        self.model_box["height"] = len(tags) + 1
+        if self.model.get() not in self.models:
+            self.model.set(self._default_model_tag or "")
+        # Demos are vendor-specific — swap to this vendor's set (demos-<vendor>.json
+        # if present, else demos.json). Reset the Demos picker if its current tag
+        # isn't in the new set.
+        demos_now, derr = load_bundles(demos_file_for_vendor(vendor), DEFAULT_DEMOS)
+        if derr:
+            self._append(f"[{derr}]\n", "note")
+        self.demo_bundles = {str(b["tag"]): b for b in demos_now}
+        self.demos_box["values"] = [NO_DEMO] + list(self.demo_bundles)
+        self.demos_box["height"] = len(self.demo_bundles) + 1
+        if self.demo_choice.get() not in self.demo_bundles:
+            self.demo_choice.set(NO_DEMO)
+        self._sync_tool_guards()
+        self._sync_title()
+        self._sync_vendor_logo()
+        self._sync_eco()
+        note = [f"Vendor → {vendor} ({self._vendor_currency()})"]
+        if self.vendors.get(vendor, {}).get("base_url"):
+            note.append(f"endpoint {self.vendors[vendor]['base_url']}")
+        key_state = ("key loaded" if (self._session_keys.get(vendor)
+                     or self.vendor_keys.get(vendor)) else "NO KEY — set one with API")
+        note.append(key_state)
+        self._append("\n[" + "; ".join(note) + "]\n", "meta")
+        if vendor != DEFAULT_VENDOR:
+            self._append(
+                "  [note: web-fetch, web-search and the sandbox use Anthropic's "
+                "built-in tool types, which the Melious gateway rejects (400) — "
+                "so they're disabled here. Melious hosts its own such tools, "
+                "reachable as custom tools (name + input_schema) — a possible "
+                "future add. Energy data (environment_impact) isn't returned on "
+                "this vendor's Anthropic endpoint, so the 🌱 meter is "
+                "unavailable here.]\n", "note")
+        self.status.set(f"vendor: {vendor}  |  "
+                        f"session total: {self._session_total()}")
+
+    def _sync_tool_guards(self):
+        """Enable the three server-tool checkboxes on Claude; disable them on any
+        other vendor (all three are Anthropic-hosted). Disabling also unticks,
+        so a guarded tool can't be sent. Idempotent — safe to call any time."""
+        home = (self._active_vendor() == DEFAULT_VENDOR)
+        for var, cb in ((self.fetch, getattr(self, "fetch_cb", None)),
+                        (self.search, getattr(self, "search_cb", None)),
+                        (self.sandbox, getattr(self, "sandbox_cb", None))):
+            if cb is None:
+                continue
+            if home:
+                cb.state(["!disabled"])
+            else:
+                var.set(False)
+                cb.state(["disabled"])
+
+    def _session_total(self):
+        """Running session cost, one figure per currency seen (e.g. '$0.03  €0.01'),
+        each in its own symbol. No conversion — Claude bills in $, Melious in €."""
+        parts = [self._money(v, sym) for sym, v in self.spend.items() if v > 0]
+        return "  ".join(parts) if parts else self._money(0.0)
+
+    def _spend_verbose(self):
+        """Full-precision per-currency session spend for the exported Markdown
+        header (e.g. '$0.001234  €0.000500'), one figure per currency, no
+        conversion."""
+        parts = [f"{sym}{v:.6f}" for sym, v in self.spend.items() if v > 0]
+        return "  ".join(parts) if parts else "$0.000000"
 
     def _model_id(self, tag):
         """The API model ID for a menu tag; falls back to the tag itself."""
@@ -679,7 +1023,8 @@ class Workbench(tk.Tk):
         m = self.models.get(tag)
         if not m:
             return tag
-        price = f"${m['input']:g} in / ${m['output']:g} out per 1M tokens"
+        sym = self.vendors.get(m.get("vendor"), {}).get("currency", "$")
+        price = f"{sym}{m['input']:g} in / {sym}{m['output']:g} out per 1M tokens"
         parts = [m["model"] or "(no model id — fix models.json)", price]
         if m["note"]:
             parts.append(m["note"])
@@ -765,18 +1110,19 @@ class Workbench(tk.Tk):
         except Exception:
             pass
 
-    def _money(self, amount):
-        """USD for the status bar. Verbose keeps full 6-decimal precision.
-        Otherwise two decimals — but a real cost that rounds down to zero
-        shows '<$0.01', never a bare '$0.00', so "there is a cost" reads
+    def _money(self, amount, symbol="$"):
+        """Money for the status bar, in the given currency symbol ($ default, so
+        callers that don't care stay unchanged). Verbose keeps full 6-decimal
+        precision. Otherwise two decimals — but a real cost that rounds down to
+        zero shows '<$0.01', never a bare '$0.00', so "there is a cost" reads
         differently from "there is no cost"."""
         if self.verbose:
-            return f"${amount:.6f}"
+            return f"{symbol}{amount:.6f}"
         if amount <= 0:
-            return "$0.00"
+            return f"{symbol}0.00"
         if round(amount, 2) == 0:
-            return "<$0.01"
-        return f"${amount:.2f}"
+            return f"<{symbol}0.01"
+        return f"{symbol}{amount:.2f}"
 
     @staticmethod
     def _thousands(n):
@@ -794,9 +1140,10 @@ class Workbench(tk.Tk):
         self.personas, err_p = load_choices(PERSONAS_FILE, DEFAULT_PERSONAS)
         self.curiosities, err_c = load_choices(CURIOSITIES_FILE,
                                                DEFAULT_CURIOSITIES)
-        demos_now, err_d = load_bundles(DEMOS_FILE, DEFAULT_DEMOS)
-        models_now, err_m = load_bundles(MODELS_FILE, DEFAULT_MODELS)
-        for e in (err_p, err_c, err_d, err_m):
+        demos_now, err_d = load_bundles(
+            demos_file_for_vendor(self._active_vendor()), DEFAULT_DEMOS)
+        models_now, errs_m = load_model_catalog()
+        for e in (err_p, err_c, err_d, self._vendor_err, *errs_m):
             if e:
                 self._config_errors.append(e)
         if Image is None:   # a default dep, but absence is tolerated — just note it
@@ -818,6 +1165,11 @@ class Workbench(tk.Tk):
 
         selgrid = ttk.Frame(top)
         selgrid.pack(side="left", anchor="n")
+
+        # Vendor (v3.0.0) is NOT in this left column — it is a higher tier than
+        # the per-question knobs, so it lives in its own set-apart box in the
+        # centre band (see the toolwrap section below). This left column is the
+        # per-request selectors, starting at Demos.
 
         # Demos: a readonly Combobox — the same widget as the others, so the
         # widths line up exactly (a Menubutton renders wider for the same char
@@ -883,8 +1235,8 @@ class Workbench(tk.Tk):
 
         # Readonly comboboxes keep their value text highlighted after a
         # pick until focus moves — clear that selection immediately.
-        for box in (self.demos_box, self.model_box, self.persona_box,
-                    self.curiosity_box, size_box):
+        for box in (self.demos_box, self.model_box,
+                    self.persona_box, self.curiosity_box, size_box):
             box.bind("<<ComboboxSelected>>",
                      lambda e: e.widget.selection_clear(), add="+")
         # Long values clip in the narrow menus; a hover panel over an open
@@ -908,28 +1260,55 @@ class Workbench(tk.Tk):
             if top_tint:
                 self._add_face(combo, var, top_tint)
 
-        # TOOLS block: the vertical gutter + the bordered checkbox box, its own
-        # free-standing frame to the right of the selectors (natural width, so
-        # the checkbox text isn't cramped). The three checkboxes ARE Anthropic
-        # API server-side *tools* — named in the request's `tools` list.
+        # Centre band (v3.0.0): the Vendor tier — its own set-apart box plus the
+        # vendor logo — stacked ABOVE the TOOLS box. Vendor is the provider
+        # switch, a higher tier than the per-question knobs, so it is boxed and
+        # separated here rather than buried in the left selector list. This whole
+        # frame is the one expanding slave of `top`, holding the middle cavity.
         toolwrap = ttk.Frame(top)
-        checks = ttk.Frame(toolwrap, borderwidth=1, relief="solid",
+
+        vendrow = ttk.Frame(toolwrap)
+        vbox = ttk.Frame(vendrow, padding=(0, 2))   # no border — position sets it apart
+        ttk.Label(vbox, text="Vendor:").pack(side="left", padx=(0, 4))
+        vend_w = min(14, max((len(v) for v in self.vendors), default=8) + 2)
+        self.vendor_box = ttk.Combobox(vbox, textvariable=self.vendor,
+                                       values=list(self.vendors),
+                                       height=len(self.vendors) + 1,
+                                       state="readonly", width=vend_w)
+        self.vendor_box.pack(side="left")
+        self.vendor_box.bind("<<ComboboxSelected>>", self._on_vendor_selected)
+        self.vendor_box.bind("<<ComboboxSelected>>",
+                             lambda e: e.widget.selection_clear(), add="+")
+        vbox.pack(side="left")
+        # Vendor logo — swapped per vendor from images/<logo> (vendors.json).
+        self.vendor_logo = ttk.Label(vendrow)
+        self.vendor_logo.pack(side="left", padx=(10, 0))
+        vendrow.pack(side="top", anchor="w")
+
+        # TOOLS block: the vertical gutter + the bordered checkbox box. The three
+        # checkboxes ARE Anthropic API server-side *tools* — named in the
+        # request's `tools` list — and the refs are kept so the vendor guard can
+        # grey them out on any non-Claude vendor.
+        toolsrow = ttk.Frame(toolwrap)
+        checks = ttk.Frame(toolsrow, borderwidth=1, relief="solid",
                            padding=(8, 3))
         self.fetch = tk.BooleanVar(value=False)
         self.search = tk.BooleanVar(value=False)
         self.sandbox = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        self.fetch_cb = ttk.Checkbutton(
             checks, variable=self.fetch,
             text="Use Internet web-fetch API, for all URLs in this dialog "
-                 "(no extra cost)").pack(anchor="w")
-        ttk.Checkbutton(
+                 "(no extra cost)")
+        self.fetch_cb.pack(anchor="w")
+        self.search_cb = ttk.Checkbutton(
             checks, variable=self.search,
             text="Use Internet web-search API / search engine "
-                 f"(extra cost: ${SEARCH_COST:.2f} per search)").pack(anchor="w")
-        ttk.Checkbutton(
+                 f"(extra cost: ${SEARCH_COST:.2f} per search)")
+        self.search_cb.pack(anchor="w")
+        self.sandbox_cb = ttk.Checkbutton(
             checks, variable=self.sandbox,
-            text="Use API Linux Sandbox (free tier, then $0.05/hr)"
-            ).pack(anchor="w")
+            text="Use API Linux Sandbox (free tier, then $0.05/hr)")
+        self.sandbox_cb.pack(anchor="w")
         self.update_idletasks()
         box_h = checks.winfo_reqheight()
         size_px = max(7, box_h // 6)
@@ -937,17 +1316,13 @@ class Workbench(tk.Tk):
         while size_px > 6 and tools_font.metrics("linespace") * 5 > box_h:
             size_px -= 1
             tools_font.configure(size=-size_px)
-        ttk.Label(toolwrap, text="T\nO\nO\nL\nS", justify="center",
+        ttk.Label(toolsrow, text="T\nO\nO\nL\nS", justify="center",
                   font=tools_font, foreground="#000000").pack(side="left",
                                                               padx=(0, 5))
         checks.pack(side="left")
-        # Drop the box down one selector row, so its top lines up with Model
-        # rather than Demos (row height = the combobox plus its 1px pads).
-        # expand=True gives it the middle cavity between the (left) selectors
-        # and the (right) button stack, so it stays centred as the window
-        # widens; the selectors hold the left edge.
-        row_h = self.demos_box.winfo_reqheight() + 2
-        toolwrap.pack(side="left", anchor="n", expand=True, pady=(row_h, 0))
+        toolsrow.pack(side="top", anchor="w", pady=(6, 0))
+
+        toolwrap.pack(side="left", anchor="n", expand=True, padx=(14, 0))
 
         # Action buttons stacked vertically, pinned to the RIGHT edge so they
         # follow it as the window widens (like Send/Save/Quit below). New on
@@ -1067,14 +1442,25 @@ class Workbench(tk.Tk):
 
         self.status = tk.StringVar(
             value=f"ready — {self._money(0.0)} this session")
-        status_bar = ttk.Label(self, textvariable=self.status, anchor="w",
-                               relief="sunken", padding=3)
+        self.status_bar = ttk.Label(self, textvariable=self.status, anchor="w",
+                                    relief="sunken", padding=3)
 
         # Pack order = squeeze priority: the cost meter claims its space
         # FIRST, then the PanedWindow absorbs the rest — transcript above
         # (weight 1: it takes any height surplus), entry row below. The
         # sash between the panes is the drag handle.
-        status_bar.pack(fill="x", side="bottom")
+        # Eco row (v3.0.0): the very-bottom row for a per-response environmental
+        # readout. Only vendors whose endpoint returns an `environment_impact`
+        # block get it — Claude's Anthropic endpoint never will, so _sync_eco
+        # HIDES the row there (an empty reservation just looks broken) and shows
+        # it as a labelled placeholder on Melious until the energy data is wired
+        # in. _sync_eco packs it `before` the status bar (keeping it the
+        # bottom-most row) or pack_forgets it, per the active vendor.
+        self.eco = tk.StringVar()
+        self.eco_bar = ttk.Label(self, textvariable=self.eco, anchor="w",
+                                 relief="groove", padding=3, foreground="#5f7a3a")
+        self.status_bar.pack(fill="x", side="bottom")
+        self._sync_eco()
         # "Response" header above the transcript (sits in the grey gap under
         # the top bar). Packed before the paned window so it lands above it.
         self._section_label(self, "Response").pack(side="top", fill="x",
@@ -1224,24 +1610,46 @@ class Workbench(tk.Tk):
         bundle). Values are normalized forgivingly ('claude-haiku-4.5' →
         'claude-haiku-4-5', '16pt' → 16); anything unusable is reported
         in the transcript and skipped."""
+        # Vendor first: it swaps the Model catalog, so a Model in the same
+        # bundle then resolves within the chosen vendor's catalog.
+        if "vendor" in settings:
+            name = match_tag(settings["vendor"], list(self.vendors))
+            if name:
+                self.vendor.set(name)
+                self._on_vendor_selected()
+            else:
+                notes.append(f"{source}: unknown vendor "
+                             f"{settings['vendor']!r} — keeping "
+                             f"{self.vendor.get()}")
         if "model" in settings:
-            raw_model = str(settings["model"]).strip()
-            # The combobox now holds a catalog TAG ("Haiku"), but config files
-            # may carry a tag, a full model ID ("claude-haiku-4-5"), or a bare
-            # family name ("claude-sonnet", "sonnet") — so old demos/settings
-            # keep working across model bumps. A family resolves to the
-            # CHEAPEST match; the combobox shows what was resolved.
-            tag = self._resolve_model_tag(raw_model)
+            mval = settings["model"]
+            # Model may be a plain value (a tag, a full ID, or a family name) OR
+            # a per-vendor map (v3.0.0) — {"claude": "haiku", "melious": "Qwen3
+            # 32B"} — so one demo works on both vendors. For the map, pick the
+            # active vendor's entry (case-insensitive key).
+            if isinstance(mval, dict):
+                lut = {str(k).strip().lower(): v for k, v in mval.items()}
+                raw_model = str(lut.get(self._active_vendor().lower(), "")).strip()
+                if not raw_model:
+                    notes.append(f"{source}: no model for vendor "
+                                 f"'{self._active_vendor()}' in {mval!r} — "
+                                 f"keeping {self.model.get()}")
+            else:
+                raw_model = str(mval).strip()
+            # The combobox holds a catalog TAG ("Haiku"), but config files may
+            # carry a tag, a full model ID ("claude-haiku-4-5"), or a bare family
+            # name ("claude-sonnet", "sonnet") — so old demos/settings keep
+            # working across model bumps. A family resolves to the CHEAPEST match.
+            tag = self._resolve_model_tag(raw_model) if raw_model else None
             if tag:
                 self.model.set(tag)
                 if tag.lower() != raw_model.lower() and "." in raw_model:
                     notes.append(f"{source}: model {raw_model!r} is "
                                  f"not a valid model ID — using '{tag}'; "
                                  f"please fix the file")
-            else:
+            elif raw_model:
                 notes.append(f"{source}: unknown model "
-                             f"{settings['model']!r} — keeping "
-                             f"{self.model.get()}")
+                             f"{raw_model!r} — keeping {self.model.get()}")
         if "persona" in settings:
             tag = match_tag(settings["persona"],
                             list(self.personas) + [NO_PERSONAS])
@@ -1419,7 +1827,7 @@ class Workbench(tk.Tk):
         self._welcome()   # don't leave a blank Response area after New either
         self._reload_choices()
         self.status.set(f"new conversation, personas, curiosities & demos "
-                        f"reloaded — session total: {self._money(self.spend)}")
+                        f"reloaded — session total: {self._session_total()}")
 
     def _reload_choices(self):
         """Re-read the JSON files (wired to New). A selection whose tag
@@ -1428,12 +1836,15 @@ class Workbench(tk.Tk):
         self.personas, err_p = load_choices(PERSONAS_FILE, DEFAULT_PERSONAS)
         self.curiosities, err_c = load_choices(CURIOSITIES_FILE,
                                                DEFAULT_CURIOSITIES)
-        demos_now, err_d = load_bundles(DEMOS_FILE, DEFAULT_DEMOS)
-        models_now, err_m = load_bundles(MODELS_FILE, DEFAULT_MODELS)
-        for err in (err_p, err_c, err_d, err_m):
+        demos_now, err_d = load_bundles(
+            demos_file_for_vendor(self._active_vendor()), DEFAULT_DEMOS)
+        models_now, errs_m = load_model_catalog()
+        for err in (err_p, err_c, err_d, *errs_m):
             if err:
                 self._append(f"[{err}]\n", "note")
         self.demo_bundles = {str(b["tag"]): b for b in demos_now}
+        # _build_model_catalog re-narrows to the active vendor via
+        # _apply_vendor_catalog, so a New keeps the current Vendor.
         self._build_model_catalog(models_now)
         cur_values = [NO_CURIOSITY] + list(self.curiosities)
         self.demos_box["values"] = [NO_DEMO] + list(self.demo_bundles)
@@ -1683,10 +2094,30 @@ class Workbench(tk.Tk):
             # thread and would freeze the window mid-download. The rendering
             # step later touches only bytes already in hand.
             files = self._download_output_files(final)
+            # Melious's streaming usage under-reports input_tokens (often 0) on
+            # its Anthropic passthrough, so the money meter would bill output
+            # only. Recover the input count with a count_tokens call — worker
+            # thread, and only when the reported input is 0, so a normal Claude
+            # turn pays no extra call. Any failure falls back to the reported
+            # value; a bad count must never crash the turn.
+            in_override = None
+            try:
+                reported_in = getattr(getattr(final, "usage", None),
+                                      "input_tokens", 0) or 0
+                if reported_in == 0:
+                    ct_kw = {"model": model, "messages": convo}
+                    if system:
+                        ct_kw["system"] = system
+                    if tools:
+                        ct_kw["tools"] = tools
+                    ct = self.client.messages.count_tokens(**ct_kw)
+                    in_override = getattr(ct, "input_tokens", None)
+            except Exception:   # noqa: BLE001 — meter falls back; never crash the turn
+                in_override = None
             # Carry the send-time model with the result: the combobox may
             # have been switched mid-stream, and the bill belongs to the
             # model that actually served the request.
-            self.q.put((gen, "done", (model, final, files)))
+            self.q.put((gen, "done", (model, final, files, in_override)))
         except Exception as exc:   # noqa: BLE001 — surface everything to the user
             self.q.put((gen, "error", f"{type(exc).__name__}: {exc}"))
         finally:
@@ -1745,7 +2176,7 @@ class Workbench(tk.Tk):
                     self.log.append({"kind": "note", "text": payload})
                     self._append(f"\n[{payload}]\n", "note")
                     self.status.set(f"error — see transcript    "
-                                    f"session total: {self._money(self.spend)}")
+                                    f"session total: {self._session_total()}")
                     self._finish()
                 elif kind == "done":
                     self._on_done(*payload)
@@ -1819,23 +2250,24 @@ class Workbench(tk.Tk):
             searches, fetches = self._web_usage(snap)
             runs = self._code_runs(snap)
         search_cost = searches * SEARCH_COST
-        self.spend += token_cost + search_cost
+        sym = self._currency_for_model(model)
+        self.spend[sym] = self.spend.get(sym, 0.0) + token_cost + search_cost
         elapsed = time.monotonic() - self._turn_start
         parts = [f"Elapsed: {elapsed:.1f}s (stopped)",
                  f"Tokens: In {self._thousands(in_tok)} "
-                 f"({self._money(in_cost)}) / Out {self._thousands(out_tok)} "
-                 f"({self._money(out_cost)})"]
+                 f"({self._money(in_cost, sym)}) / Out {self._thousands(out_tok)} "
+                 f"({self._money(out_cost, sym)})"]
         if searches:
-            parts.append(f"Searches: {searches} ({self._money(search_cost)})")
+            parts.append(f"Searches: {searches} ({self._money(search_cost, sym)})")
         if fetches:
             parts.append(f"Fetches: {fetches} (tokens only)")
         if runs:
             parts.append(f"Code runs: {runs} (free tier / $0.05/hr)")
         self.status.set("    |    ".join(parts)
-                        + f"    |    Session total: {self._money(self.spend)}"
+                        + f"    |    Session total: {self._session_total()}"
                         + " (est)")
 
-    def _on_done(self, model, msg, files=None):
+    def _on_done(self, model, msg, files=None, in_tokens_override=None):
         self._spinning = False   # stop before the final meter reading lands
         if msg.stop_reason == "refusal":
             # Drop the refused user turn too — left in place it would be
@@ -1865,7 +2297,7 @@ class Workbench(tk.Tk):
             self._note_web_activity(msg, files)
             searches, fetches = self._web_usage(msg)
             self._web_used_last_turn = bool(searches or fetches)
-        self._add_cost(model, msg)
+        self._add_cost(model, msg, in_tokens_override)
         self._append("\n", "assistant")
         self._finish()
 
@@ -2099,26 +2531,36 @@ class Workbench(tk.Tk):
         return sum(1 for b in msg.content
                    if getattr(b, "type", "") == "bash_code_execution_tool_result")
 
-    def _add_cost(self, model, msg):
+    def _add_cost(self, model, msg, in_tokens_override=None):
         """The meter: one parenthesized sub-cost per mechanism — tokens,
         then searches — and the session total sums them. Zero counts are
-        not shown; fetched pages already appear inside the token count."""
+        not shown; fetched pages already appear inside the token count.
+        `in_tokens_override` supplies the input-token count when the vendor's
+        usage reports 0 (Melious's streaming passthrough does this); it is
+        recovered via count_tokens on the worker thread, so the input cost isn't
+        silently lost, and the meter marks it `via count_tokens` (fail loud)."""
         rate_in, rate_out = self.pricing.get(model, (0.0, 0.0))
         u = msg.usage
-        in_cost = u.input_tokens * rate_in / 1_000_000
+        in_tok = u.input_tokens or 0
+        est_in = False
+        if in_tok == 0 and in_tokens_override:
+            in_tok, est_in = in_tokens_override, True
+        in_cost = in_tok * rate_in / 1_000_000
         out_cost = u.output_tokens * rate_out / 1_000_000
         token_cost = in_cost + out_cost
         searches, fetches = self._web_usage(msg)
         search_cost = searches * SEARCH_COST
-        self.spend += token_cost + search_cost
+        sym = self._currency_for_model(model)
+        self.spend[sym] = self.spend.get(sym, 0.0) + token_cost + search_cost
         elapsed = time.monotonic() - self._turn_start
+        in_label = self._thousands(in_tok) + (" via count_tokens" if est_in else "")
         parts = [f"Elapsed: {elapsed:.1f}s",
-                 f"Tokens: In {self._thousands(u.input_tokens)} "
-                 f"({self._money(in_cost)}) / Out "
+                 f"Tokens: In {in_label} "
+                 f"({self._money(in_cost, sym)}) / Out "
                  f"{self._thousands(u.output_tokens)} "
-                 f"({self._money(out_cost)})"]
+                 f"({self._money(out_cost, sym)})"]
         if searches:
-            parts.append(f"Searches: {searches} ({self._money(search_cost)})")
+            parts.append(f"Searches: {searches} ({self._money(search_cost, sym)})")
         if fetches:
             parts.append(f"Fetches: {fetches} (tokens only)")
         runs = self._code_runs(msg)
@@ -2127,7 +2569,7 @@ class Workbench(tk.Tk):
             # figure — the one lab mechanism the meter cannot price.
             parts.append(f"Code runs: {runs} (free tier / $0.05/hr)")
         self.status.set("    |    ".join(parts)
-                        + f"    |    Session total: {self._money(self.spend)}")
+                        + f"    |    Session total: {self._session_total()}")
 
     def _spin(self):
         """Live activity indicator in the status bar: a rotating glyph and
@@ -2229,9 +2671,12 @@ class Workbench(tk.Tk):
             self._set_api_key(path)
 
     def _set_api_key(self, path):
-        """Read a key file and rebuild the API client with it. Only the
-        last four characters are ever shown; the key itself is never
-        logged, echoed, or written anywhere."""
+        """API button: read a key file and set it as THIS RUN's session key for
+        the ACTIVE vendor, then rebuild that vendor's client (preserving its
+        base_url). Only the last four characters are shown; the key itself is
+        never logged, echoed, or written anywhere. The session key wins over the
+        file/env keys for that vendor until New/Quit — and it's scoped to the
+        vendor, so setting a Melious key never touches Claude's client."""
         if anthropic is None:
             self._append("\n[the 'anthropic' package isn't installed — "
                          "run: pip install anthropic]\n", "note")
@@ -2247,13 +2692,26 @@ class Workbench(tk.Tk):
         if not key:
             self._append(f"\n[api-key file “{name}” is empty]\n", "note")
             return
-        self.client = anthropic.Anthropic(api_key=key)
+        vendor = self._active_vendor()
+        self._session_keys[vendor] = key
+        self._build_client_for_vendor(vendor)
         masked = key[-4:] if len(key) >= 12 else "????"
-        warn = ("" if key.startswith("sk-ant-")
+        # Claude keys look like sk-ant-…; other vendors have their own shapes,
+        # so only warn about the shape on the home vendor.
+        warn = ("" if (vendor != DEFAULT_VENDOR or key.startswith("sk-ant-"))
                 else " — warning: doesn't look like an Anthropic key")
-        self._append(f"\n[API key …{masked} loaded from “{name}”"
+        self._append(f"\n[API key …{masked} loaded from “{name}” for {vendor}"
                      f"{warn}]\n", "meta")
-        self.status.set(f"API key …{masked} active (from {name})")
+        self.status.set(f"API key …{masked} active for {vendor} (from {name})")
+
+    def _announce_startup_key(self):
+        """One-line masked note of the active vendor's resolved key at startup,
+        or nothing if none — the no-key Send guard covers the missing case."""
+        vendor = self._active_vendor()
+        key = self.vendor_keys.get(vendor) or ""
+        if key:
+            masked = key[-4:] if len(key) >= 12 else "????"
+            self._append(f"[API key …{masked} active for {vendor}]\n", "meta")
 
     # ---- me-file -----------------------------------------------------------
     def _load_me(self):
@@ -2353,8 +2811,8 @@ class Workbench(tk.Tk):
         the turn labels."""
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         lines = [f"# Curiosity Lab chat — {now}", "",
-                 f"*Exported by Curiosity Lab for Claude v{__version__}; "
-                 f"session spend ${self.spend:.6f}.*", ""]
+                 f"*Exported by Curiosity Lab v{__version__}; "
+                 f"session spend {self._spend_verbose()}.*", ""]
         for entry in self.log:
             kind = entry["kind"]
             if kind == "user":

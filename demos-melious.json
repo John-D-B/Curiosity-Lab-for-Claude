@@ -1,0 +1,51 @@
+[
+  {
+    "tag": "Which model am I?",
+    "Model": "GPT-OSS 120B",
+    "Persona": "Concise",
+    "Curiosity": "Sources",
+    "Prompt": "In one line each: what model are you, who built you, and where are you likely hosted? If unsure, say so plainly."
+  },
+  {
+    "tag": "Pirate wisdom",
+    "Model": "GPT-OSS 120B",
+    "Persona": "Pirate",
+    "Curiosity": "Questions",
+    "Prompt": "Should I get out of bed tomorrow morning?"
+  },
+  {
+    "tag": "Skeptic vs. microservices",
+    "Model": "DeepSeek V3.1",
+    "Persona": "Skeptic",
+    "Curiosity": "Counterpoint",
+    "Prompt": "We switched to microservices and productivity doubled. Should everyone do it?"
+  },
+  {
+    "tag": "Teach me OAuth",
+    "Model": "Llama 3.3 70B",
+    "Persona": "Teacher",
+    "Curiosity": "Sources",
+    "Prompt": "Explain how OAuth login works, like I'm smart but new to it."
+  },
+  {
+    "tag": "Hotdog, rigorously",
+    "Model": "DeepSeek V3.1",
+    "Persona": "Skeptic",
+    "Curiosity": "Counterpoint",
+    "Prompt": "Is a hotdog a sandwich? Give the strongest case each way, then rule."
+  },
+  {
+    "tag": "Three-switch puzzle",
+    "Model": "GLM 5.2",
+    "Persona": "Concise",
+    "Curiosity": "(none)",
+    "Prompt": "Three switches outside a room, one bulb inside. You may enter the room only once. How do you tell which switch controls the bulb? Explain the reasoning."
+  },
+  {
+    "tag": "EU open-weight tradeoffs",
+    "Model": "Llama 3.3 70B",
+    "Persona": "Concise",
+    "Curiosity": "Sources",
+    "Prompt": "For a privacy-conscious user, what are the real tradeoffs of an EU-hosted open-weight model versus a US proprietary one?"
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "Claude": {
+    "base_url": null,
+    "currency": "$",
+    "key_file": "apikey-claude.txt",
+    "key_env": "ANTHROPIC_API_KEY",
+    "logo": "icon-claude.png"
+  },
+  "Melious": {
+    "base_url": "https://api.melious.ai",
+    "currency": "€",
+    "key_file": "apikey-melious.txt",
+    "key_env": "MELIOUS_API_KEY",
+    "logo": "icon-melious.png"
+  }
+}

@@ -1,16 +1,17 @@
 [
   {
-    "tag": "Introspection",
+    "tag": "Which model am I?",
     "Model": "haiku",
-    "Persona": "Claude",
+    "Persona": "Concise",
     "Curiosity": "Sources",
-    "Fetch": true,
-    "Search": false,
-    "Prompt": "Show my web page: https://github.com/John-D-B/Curiosity-Lab-for-Claude"
+    "Prompt": "In one line each: what model are you, who built you, and where are you likely hosted? If unsure, say so plainly."
   },
   {
     "tag": "Show Claude costs",
-    "Model": "haiku",
+    "Model": {
+      "claude": "haiku",
+      "melious": "Qwen3 32B"
+    },
     "Persona": "Concise",
     "Curiosity": "(none)",
     "Fetch": true,
@@ -19,7 +20,10 @@
   },
   {
     "tag": "Curiosity Lab: Unique?",
-    "Model": "haiku",
+    "Model": {
+      "claude": "haiku",
+      "melious": "Qwen3 32B"
+    },
     "Persona": "Claude",
     "Curiosity": "Sources",
     "Fetch": true,
@@ -28,42 +32,60 @@
   },
   {
     "tag": "Which AI should I buy?",
-    "Model": "haiku",
+    "Model": {
+      "claude": "haiku",
+      "melious": "Qwen3 32B"
+    },
     "Persona": "ChatGPT",
     "Curiosity": "(none)",
     "Prompt": "Which AI assistant should I subscribe to?"
   },
   {
     "tag": "Pirate wisdom",
-    "Model": "haiku",
+    "Model": {
+      "claude": "haiku",
+      "melious": "Qwen3 32B"
+    },
     "Persona": "Pirate",
     "Curiosity": "Questions",
     "Prompt": "Should I get out of bed tomorrow morning?"
   },
   {
     "tag": "Skeptic vs. microservices",
-    "Model": "sonnet",
+    "Model": {
+      "claude": "sonnet",
+      "melious": "DeepSeek V3.1"
+    },
     "Persona": "Skeptic",
     "Curiosity": "Counterpoint",
     "Prompt": "We switched to microservices and productivity doubled. Should everyone do it?"
   },
   {
     "tag": "Skeptic vs. Kubernetes",
-    "Model": "sonnet",
+    "Model": {
+      "claude": "sonnet",
+      "melious": "DeepSeek V3.1"
+    },
     "Persona": "Skeptic",
     "Curiosity": "Counterpoint",
     "Prompt": "I heard that much software has switched to Kubernetes. Should everyone do it?"
   },
   {
     "tag": "Agony Aunt: commit wars",
-    "Model": "haiku",
+    "Model": {
+      "claude": "haiku",
+      "melious": "Qwen3 32B"
+    },
     "Persona": "Agony Aunt",
     "Curiosity": "(none)",
     "Prompt": "My colleague keeps rewriting my commits. Should I confront him?"
   },
   {
     "tag": "Jokes",
-    "Model": "sonnet",
+    "Model": {
+      "claude": "sonnet",
+      "melious": "DeepSeek V3.1"
+    },
     "Persona": "Gemini",
     "Curiosity": "Misunderstanding",
     "Search": true,
@@ -71,21 +93,30 @@
   },
   {
     "tag": "Teach me OAuth",
-    "Model": "sonnet",
+    "Model": {
+      "claude": "sonnet",
+      "melious": "DeepSeek V3.1"
+    },
     "Persona": "Teacher",
     "Curiosity": "Sources",
     "Prompt": "Explain how OAuth login works, like I'm smart but new to it."
   },
   {
     "tag": "Grok's hot take",
-    "Model": "haiku",
+    "Model": {
+      "claude": "haiku",
+      "melious": "Qwen3 32B"
+    },
     "Persona": "XGrok",
     "Curiosity": "Misunderstanding",
     "Prompt": "Is a hotdog a sandwich?"
   },
   {
     "tag": "Sandbox introspection",
-    "Model": "haiku",
+    "Model": {
+      "claude": "haiku",
+      "melious": "Qwen3 32B"
+    },
     "Persona": "Concise",
     "Curiosity": "(none)",
     "Sandbox": true,
@@ -93,7 +124,10 @@
   },
   {
     "tag": "Mandelbrot in sandbox",
-    "Model": "haiku",
+    "Model": {
+      "claude": "haiku",
+      "melious": "Qwen3 32B"
+    },
     "Persona": "Concise",
     "Curiosity": "Sources",
     "Sandbox": true,
@@ -101,7 +135,10 @@
   },
   {
     "tag": "Python script: PI digits",
-    "Model": "sonnet",
+    "Model": {
+      "claude": "sonnet",
+      "melious": "DeepSeek V3.1"
+    },
     "Persona": "Concise",
     "Curiosity": "(none)",
     "Sandbox": false,
